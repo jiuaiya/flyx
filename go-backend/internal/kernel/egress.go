@@ -244,6 +244,9 @@ func applyOutboundIPPolicies(kernelType string, cfg obj, inbounds []Inbound, pre
 	route["rules"] = append(append(append(append(prefix, preprocess...), scoped...), fallback...), shared...)
 	if kernelType == TypeSingbox {
 		route["final"] = "direct"
+		// Automatic/shared dialers still need an unambiguous resolver when
+		// different inbound policies add more than one local DNS server.
+		route["default_domain_resolver"] = resolvers[0].(obj)["tag"]
 		cfg["dns"] = obj{"servers": resolvers}
 	}
 	cfg["outbounds"] = outbounds

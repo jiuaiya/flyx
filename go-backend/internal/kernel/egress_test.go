@@ -143,6 +143,9 @@ func TestIPv6OnlyAlongsideIPv4AndAutomatic(t *testing.T) {
 				if len(servers) != 2 || servers[0].(map[string]interface{})["tag"] != ipv6ResolverTag || servers[1].(map[string]interface{})["tag"] != ipv4ResolverTag {
 					t.Fatalf("both policies must have valid local DNS references: %v", servers)
 				}
+				if cfg["route"].(map[string]interface{})["default_domain_resolver"] != ipv6ResolverTag {
+					t.Fatal("mixed policies must define a default resolver for automatic inbounds")
+				}
 			}
 		})
 	}
