@@ -8,11 +8,13 @@ import (
 )
 
 const (
-	OutboundIPAuto   = "auto"
-	OutboundIPv4Only = "ipv4_only"
-	OutboundIPv6Only = "ipv6_only"
-	ipv4ResolverTag  = "flvx-ipv4-resolver"
-	ipv6ResolverTag  = "flvx-ipv6-resolver"
+	OutboundIPAuto     = "auto"
+	OutboundIPv4Only   = "ipv4_only"
+	OutboundIPv6Only   = "ipv6_only"
+	OutboundPreferIPv4 = "prefer_ipv4"
+	OutboundPreferIPv6 = "prefer_ipv6"
+	ipv4ResolverTag    = "flvx-ipv4-resolver"
+	ipv6ResolverTag    = "flvx-ipv6-resolver"
 )
 
 // NormalizeOutboundIPStrategy keeps old configurations automatic and rejects
@@ -22,7 +24,7 @@ func NormalizeOutboundIPStrategy(kernelType, strategy string) (string, error) {
 	if strategy == "" {
 		strategy = OutboundIPAuto
 	}
-	if strategy != OutboundIPAuto && strategy != OutboundIPv4Only && strategy != OutboundIPv6Only {
+	if strategy != OutboundIPAuto && strategy != OutboundIPv4Only && strategy != OutboundIPv6Only && !isOutboundIPPreference(strategy) {
 		return "", fmt.Errorf("未知出站 IP 策略 %q", strategy)
 	}
 	if strategy != OutboundIPAuto && kernelType != TypeXray && kernelType != TypeSingbox {
@@ -47,7 +49,7 @@ func ValidateOutboundIPExtra(kernelType, strategy string, extra json.RawMessage)
 	}
 	for _, key := range []string{"tag", "detour"} {
 		if _, exists := fields[key]; exists {
-			return fmt.Errorf("限制出站 IP 时，高级配置不能覆盖 %s 字段", key)
+			return fmt.Errorf("指定出站 IP 策略时，高级配置不能覆盖 %s 字段", key)
 		}
 	}
 	return nil
@@ -93,21 +95,29 @@ func applyOutboundIPPolicies(kernelType string, cfg obj, inbounds []Inbound, pre
 	var resolvers []interface{}
 	resolverAdded := map[string]bool{}
 	for _, in := range restricted {
+		preferred := isOutboundIPPreference(in.OutboundIPStrategy)
 		family, blockedFamily := 4, 6
 		blockedCIDR, bindAddress, bindKey := "::/0", "0.0.0.0", "inet4_bind_address"
 		domainStrategy, resolverTag := "ForceIPv4", ipv4ResolverTag
-		if in.OutboundIPStrategy == OutboundIPv6Only {
+		if in.OutboundIPStrategy == OutboundIPv6Only || in.OutboundIPStrategy == OutboundPreferIPv6 {
 			family, blockedFamily = 6, 4
 			blockedCIDR, bindAddress, bindKey = "0.0.0.0/0", "::", "inet6_bind_address"
 			domainStrategy, resolverTag = "ForceIPv6", ipv6ResolverTag
 		}
 		tagPrefix := fmt.Sprintf("ipv%d-", family)
+		if preferred {
+			tagPrefix = "prefer-" + tagPrefix
+		}
 		tags := singboxInboundTags(in)
 		if kernelType == TypeXray {
 			tags = []string{in.Tag()}
-			prefix = append(prefix, obj{"type": "field", inboundKey: tags, "ip": []string{blockedCIDR}, outboundKey: "block"})
+			if !preferred {
+				prefix = append(prefix, obj{"type": "field", inboundKey: tags, "ip": []string{blockedCIDR}, outboundKey: "block"})
+			}
 		} else {
-			prefix = append(prefix, obj{inboundKey: tags, "ip_version": blockedFamily, "action": "reject"})
+			if !preferred {
+				prefix = append(prefix, obj{inboundKey: tags, "ip_version": blockedFamily, "action": "reject"})
+			}
 			if !resolverAdded[resolverTag] {
 				resolver := obj{"type": "local", "tag": resolverTag}
 				if preferGoDNS {
@@ -132,11 +142,32 @@ func applyOutboundIPPolicies(kernelType string, cfg obj, inbounds []Inbound, pre
 					sockopt = obj{}
 					stream["sockopt"] = sockopt
 				}
-				sockopt["domainStrategy"] = domainStrategy
-				ob["sendThrough"] = bindAddress
+				if preferred {
+					// Both A and AAAA must reach the connection racer. IPv4v6 /
+					// IPv6v4 strategies only fall back when DNS returns no IPs.
+					sockopt["domainStrategy"] = "ForceIP"
+					sockopt["happyEyeballs"] = obj{"prioritizeIPv6": family == 6, "tryDelayMs": 250, "interleave": 1, "maxConcurrentTry": 4}
+				} else {
+					sockopt["domainStrategy"] = domainStrategy
+					ob["sendThrough"] = bindAddress
+					// Older Xray UDP packet writers resolve domains through
+					// freedom settings rather than transport sockopt.
+					if ob["protocol"] == "freedom" {
+						settings, _ := ob["settings"].(obj)
+						if settings == nil {
+							settings = obj{}
+							ob["settings"] = settings
+						}
+						settings["domainStrategy"] = domainStrategy
+					}
+				}
 			} else if ob["detour"] == nil {
 				ob["domain_resolver"] = obj{"server": resolverTag, "strategy": in.OutboundIPStrategy}
-				ob[bindKey] = bindAddress
+				if preferred {
+					ob["fallback_delay"] = "250ms"
+				} else {
+					ob[bindKey] = bindAddress
+				}
 			}
 			return nil
 		}
@@ -216,7 +247,14 @@ func applyOutboundIPPolicies(kernelType string, cfg obj, inbounds []Inbound, pre
 		cfg["dns"] = obj{"servers": resolvers}
 	}
 	cfg["outbounds"] = outbounds
+	if kernelType == TypeXray {
+		applyXrayUDPPreferences(cfg, restricted)
+	}
 	return nil
+}
+
+func isOutboundIPPreference(strategy string) bool {
+	return strategy == OutboundPreferIPv4 || strategy == OutboundPreferIPv6
 }
 
 func containsInboundTag(value interface{}, tags []string) bool {

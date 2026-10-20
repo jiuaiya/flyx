@@ -17,7 +17,7 @@ func TestOutboundIPVersionAndChain(t *testing.T) {
 	if kernelCaps("1.12.0").SingboxPreferGoDNS {
 		t.Fatal("sing-box 1.12 does not support prefer_go")
 	}
-	for _, policy := range []string{kernel.OutboundIPv4Only, kernel.OutboundIPv6Only} {
+	for _, policy := range []string{kernel.OutboundIPv4Only, kernel.OutboundIPv6Only, kernel.OutboundPreferIPv4, kernel.OutboundPreferIPv6} {
 		for _, version := range []string{"1.11.15", "v1.10.0"} {
 			if err := validateOutboundIPVersion(kernel.TypeSingbox, version, policy); err == nil {
 				t.Fatalf("old sing-box %s accepted", version)
@@ -86,5 +86,23 @@ func TestIPv6OnlyChainValidation(t *testing.T) {
 	}
 	if err := h.checkKernelVersionFits(box.ID, kernel.TypeSingbox, "1.11.15"); err == nil {
 		t.Fatal("downgrade must not bypass IPv6-only policy")
+	}
+}
+
+func TestXrayPreferredEgressVersion(t *testing.T) {
+	for _, policy := range []string{kernel.OutboundPreferIPv4, kernel.OutboundPreferIPv6} {
+		for _, version := range []string{"24.12.31", "25.5.16", "25.6", "v25.6.7"} {
+			if err := validateOutboundIPVersion(kernel.TypeXray, version, policy); err == nil {
+				t.Fatalf("%s accepted Happy Eyeballs policy %s", version, policy)
+			}
+		}
+		for _, version := range []string{"25.6.8", "25.7.1", "26.3.27", "latest"} {
+			if err := validateOutboundIPVersion(kernel.TypeXray, version, policy); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := validateOutboundIPVersion(kernel.TypeXray, "24.12.31", kernel.OutboundIPv4Only); err != nil {
+		t.Fatalf("strict policies must keep supporting older Xray: %v", err)
 	}
 }

@@ -8,7 +8,7 @@ import (
 )
 
 func TestInboundOutboundIPStrategyContract(t *testing.T) {
-	for _, policy := range []string{"ipv4_only", "ipv6_only"} {
+	for _, policy := range []string{"ipv4_only", "ipv6_only", "prefer_ipv4", "prefer_ipv6"} {
 		t.Run(policy, func(t *testing.T) {
 			secret := "contract-egress-secret"
 			router, r := setupContractRouter(t, secret)

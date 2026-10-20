@@ -978,7 +978,12 @@ export const updateInboundSplit = (data: {
   id: number;
   outboundId: number;
   splitRules: SplitRule[];
-  outboundIpStrategy?: "auto" | "ipv4_only" | "ipv6_only";
+  outboundIpStrategy?:
+    | "auto"
+    | "ipv4_only"
+    | "ipv6_only"
+    | "prefer_ipv4"
+    | "prefer_ipv6";
 }) => Network.post("/inbound/split", data);
 export const toggleInbound = (id: number, enabled: boolean) =>
   Network.post("/inbound/toggle", { id, enabled });

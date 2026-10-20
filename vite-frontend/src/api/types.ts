@@ -819,7 +819,12 @@ export interface NodeRoute {
 
 export interface InboundApiItem {
   /** Local egress address family, independent of the inbound listener. */
-  outboundIpStrategy?: "auto" | "ipv4_only" | "ipv6_only";
+  outboundIpStrategy?:
+    | "auto"
+    | "ipv4_only"
+    | "ipv6_only"
+    | "prefer_ipv4"
+    | "prefer_ipv6";
   id: number;
   kernelId: number;
   kernelType: string;
@@ -868,7 +873,12 @@ export interface InboundApiItem {
 }
 
 export interface InboundMutationPayload {
-  outboundIpStrategy?: "auto" | "ipv4_only" | "ipv6_only";
+  outboundIpStrategy?:
+    | "auto"
+    | "ipv4_only"
+    | "ipv6_only"
+    | "prefer_ipv4"
+    | "prefer_ipv6";
   id?: number;
   nodeId?: number;
   kernelType?: string;

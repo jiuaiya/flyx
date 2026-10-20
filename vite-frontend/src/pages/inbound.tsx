@@ -630,15 +630,21 @@ export default function InboundPage() {
 
     const badges = (
       <>
-        {(item.outboundIpStrategy === "ipv4_only" ||
-          item.outboundIpStrategy === "ipv6_only") && (
+        {item.outboundIpStrategy && item.outboundIpStrategy !== "auto" && (
           <Chip
             className="shrink-0 whitespace-nowrap"
             color="primary"
             size="sm"
             variant="flat"
           >
-            {item.outboundIpStrategy === "ipv6_only" ? "IPv6" : "IPv4"} 出站
+            {
+              {
+                ipv4_only: "IPv4 出站",
+                ipv6_only: "IPv6 出站",
+                prefer_ipv4: "优先 IPv4",
+                prefer_ipv6: "优先 IPv6",
+              }[item.outboundIpStrategy]
+            }
           </Chip>
         )}
         {item.relayCount > 0 && (

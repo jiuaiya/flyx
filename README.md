@@ -4,7 +4,7 @@
 
 # FLYX
 
-本分支由 `jiuaiya/flyx` 构建和发布，提供每个入站独立的自动、仅 IPv4、仅 IPv6 出站策略，保留原有入站地址。[配置说明](doc/guide/routing.md#出站-ip-策略jiuaiya-分支)
+本分支由 `jiuaiya/flyx` 构建和发布，提供每个入站独立的自动、仅 IPv4、仅 IPv6、优先 IPv4、优先 IPv6 出站策略，保留原有入站地址。[配置说明](doc/guide/routing.md#出站-ip-策略jiuaiya-分支)
 
 转发 + 节点搭建面板
 

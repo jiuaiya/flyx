@@ -75,6 +75,9 @@ func assertIPDialer(t *testing.T, kt string, ob map[string]interface{}, counted 
 		if ob["sendThrough"] != bind || sock["domainStrategy"] != sockStrategy {
 			t.Fatalf("Xray must enforce %s without fallback: %v", policy, ob)
 		}
+		if ob["protocol"] == "freedom" && ob["settings"].(map[string]interface{})["domainStrategy"] != sockStrategy {
+			t.Fatalf("freedom UDP packet writer must enforce %s: %v", policy, ob)
+		}
 		if counted && sock["mark"] != float64(UserMark(7)) {
 			t.Fatalf("lost accounting socket mark: %v", ob)
 		}
@@ -181,7 +184,7 @@ func TestIPv6OnlySplitChainAndAdvancedConfiguration(t *testing.T) {
 }
 
 func TestOutboundIPServerFamily(t *testing.T) {
-	for _, policy := range []string{OutboundIPAuto, OutboundIPv4Only, OutboundIPv6Only} {
+	for _, policy := range []string{OutboundIPAuto, OutboundIPv4Only, OutboundIPv6Only, OutboundPreferIPv4, OutboundPreferIPv6} {
 		for _, address := range []string{"192.0.2.1", "::ffff:192.0.2.1", "2001:db8::1", "[2001:db8::1]", "exit.example.com"} {
 			v4 := address == "192.0.2.1" || address == "::ffff:192.0.2.1"
 			wantError := address != "exit.example.com" && ((policy == OutboundIPv4Only && !v4) || (policy == OutboundIPv6Only && v4))
@@ -232,7 +235,7 @@ func TestIPv4OnlyShadowTLSAndValidation(t *testing.T) {
 	if got := rules[0].(map[string]interface{})["inbound"]; !reflect.DeepEqual(got, []interface{}{"in-3", "in-3-ss"}) {
 		t.Fatalf("both ShadowTLS and decrypted traffic must be covered: %v", got)
 	}
-	for _, tt := range []struct{ kernel, policy string }{{TypeSnell, OutboundIPv4Only}, {TypeXray, "ipv4_prefer"}} {
+	for _, tt := range []struct{ kernel, policy string }{{TypeSnell, OutboundIPv4Only}, {TypeXray, "invalid_policy"}} {
 		if _, err := NormalizeOutboundIPStrategy(tt.kernel, tt.policy); err == nil {
 			t.Fatalf("unsupported policy accepted: %+v", tt)
 		}
@@ -261,7 +264,7 @@ func TestIPv4OnlyExtraCannotBypassPolicy(t *testing.T) {
 }
 
 func TestRestrictedLocalDNSVersionCompatibility(t *testing.T) {
-	for _, policy := range []string{OutboundIPv4Only, OutboundIPv6Only} {
+	for _, policy := range []string{OutboundIPv4Only, OutboundIPv6Only, OutboundPreferIPv4, OutboundPreferIPv6} {
 		for _, preferGo := range []bool{false, true} {
 			in := Inbound{ID: 1, Protocol: ProtocolVLESS, Listen: "::", Port: 8388, OutboundIPStrategy: policy}
 			if err := Normalize(TypeSingbox, &in); err != nil {
@@ -278,6 +281,120 @@ func TestRestrictedLocalDNSVersionCompatibility(t *testing.T) {
 			}
 			if !preferGo && resolver["prefer_go"] != nil {
 				t.Fatalf("sing-box 1.12 must not receive the unsupported prefer_go field: %v", resolver)
+			}
+		}
+	}
+}
+
+func TestPreferredEgressRoutingAndFallback(t *testing.T) {
+	for _, kt := range []string{TypeXray, TypeSingbox} {
+		for _, policy := range []string{OutboundPreferIPv4, OutboundPreferIPv6} {
+			t.Run(kt+"/"+policy, func(t *testing.T) {
+				in := Inbound{ID: 1, Protocol: ProtocolVLESS, Listen: "::", Port: 8388,
+					Settings: Settings{UUID: "00000000-0000-4000-8000-000000000000"},
+					Users:    chainUser, OutboundIPStrategy: policy}
+				auto := in
+				auto.ID, auto.Port, auto.OutboundIPStrategy = 2, 8389, OutboundIPAuto
+				cfg := renderJSON(t, kt, []Inbound{in, auto})
+				prefix := "prefer-ipv4-in-1-"
+				if policy == OutboundPreferIPv6 {
+					prefix = "prefer-ipv6-in-1-"
+				}
+				for _, suffix := range []string{"direct", "flvx-u7"} {
+					assertPreferredDialer(t, kt, outboundByTag(cfg, prefix+suffix), policy, suffix == "flvx-u7")
+					if kt == TypeXray {
+						udp := outboundByTag(cfg, prefix+suffix+"-udp")
+						want := "ForceIPv4v6"
+						if policy == OutboundPreferIPv6 {
+							want = "ForceIPv6v4"
+						}
+						if udp == nil || udp["settings"].(map[string]interface{})["domainStrategy"] != want {
+							t.Fatalf("UDP packet writer needs its own DNS preference: %v", udp)
+						}
+						if sock := udp["streamSettings"].(map[string]interface{})["sockopt"].(map[string]interface{}); sock["happyEyeballs"] != nil || sock["domainStrategy"] != want || (suffix == "flvx-u7" && sock["mark"] != float64(UserMark(7))) {
+							t.Fatalf("UDP preference lost policy or accounting: %v", sock)
+						}
+					}
+				}
+				routeKey, outKey := "route", "outbound"
+				if kt == TypeXray {
+					routeKey, outKey = "routing", "outboundTag"
+				}
+				rules := cfg[routeKey].(map[string]interface{})["rules"].([]interface{})
+				for _, value := range rules {
+					rule := value.(map[string]interface{})
+					if rule["action"] == "reject" || rule[outKey] == "block" {
+						t.Fatalf("preference must not reject the other family: %v", rule)
+					}
+				}
+				if last := rules[len(rules)-1].(map[string]interface{}); last[outKey] != "flvx-u7" {
+					t.Fatalf("global user routing must follow inbound-scoped preference: %v", last)
+				}
+				shared := outboundByTag(cfg, "flvx-u7")
+				if shared["domain_resolver"] != nil || shared["sendThrough"] != nil {
+					t.Fatalf("automatic inbound was modified: %v", shared)
+				}
+				if kt == TypeXray && shared["streamSettings"].(map[string]interface{})["sockopt"].(map[string]interface{})["happyEyeballs"] != nil {
+					t.Fatal("automatic inbound inherited preference")
+				}
+				for _, extra := range []string{`{"tag":"custom"}`, `{"detour":"in-2"}`} {
+					in.Extra = json.RawMessage(extra)
+					if err := Normalize(kt, &in); err == nil {
+						t.Fatalf("preference accepted a routing bypass: %s", extra)
+					}
+				}
+			})
+		}
+	}
+}
+
+func assertPreferredDialer(t *testing.T, kt string, ob map[string]interface{}, policy string, counted bool) {
+	t.Helper()
+	if ob == nil {
+		t.Fatal("missing preferred outbound")
+	}
+	for _, key := range []string{"sendThrough", "inet4_bind_address", "inet6_bind_address"} {
+		if ob[key] != nil {
+			t.Fatalf("binding a family prevents connection fallback: %v", ob)
+		}
+	}
+	if kt == TypeXray {
+		sock := ob["streamSettings"].(map[string]interface{})["sockopt"].(map[string]interface{})
+		happy := sock["happyEyeballs"].(map[string]interface{})
+		if sock["domainStrategy"] != "ForceIP" || happy["prioritizeIPv6"] != (policy == OutboundPreferIPv6) || happy["tryDelayMs"] != float64(250) || happy["maxConcurrentTry"] != float64(4) {
+			t.Fatalf("must resolve both families and enable connection racing: %v", sock)
+		}
+		if counted && sock["mark"] != float64(UserMark(7)) {
+			t.Fatalf("lost user mark: %v", sock)
+		}
+	} else {
+		resolver := ob["domain_resolver"].(map[string]interface{})
+		if resolver["strategy"] != policy || ob["fallback_delay"] != "250ms" {
+			t.Fatalf("missing preferred resolver/connection fallback: %v", ob)
+		}
+		if counted && ob["routing_mark"] != float64(UserMark(7)) {
+			t.Fatalf("lost user mark: %v", ob)
+		}
+	}
+}
+
+func TestPreferredEgressSplitAndChain(t *testing.T) {
+	for _, kt := range []string{TypeXray, TypeSingbox} {
+		for _, policy := range []string{OutboundPreferIPv4, OutboundPreferIPv6} {
+			in := splitInbound()
+			in.OutboundIPStrategy = policy
+			in.Via = &Endpoint{Host: "exit.example.com", Port: 443, Proxy: Proxy{"type": "trojan", "server": "exit.example.com", "port": 443, "password": "x"}}
+			cfg := renderJSON(t, kt, []Inbound{in})
+			for _, tag := range []string{"via-1", "via-1-u7", "via-1-s1", "via-1-s1-u7"} {
+				assertPreferredDialer(t, kt, outboundByTag(cfg, tag), policy, strings.HasSuffix(tag, "u7"))
+			}
+			if kt == TypeXray {
+				for _, tag := range []string{"via-1-s1-udp", "via-1-s1-u7-udp"} {
+					udp := outboundByTag(cfg, tag)
+					if udp == nil || udp["protocol"] != "shadowsocks" {
+						t.Fatalf("Shadowsocks UDP next hop needs preferred-family dialer: %v", udp)
+					}
+				}
 			}
 		}
 	}

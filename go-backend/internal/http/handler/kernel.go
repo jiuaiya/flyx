@@ -1363,8 +1363,8 @@ func (h *Handler) kernelVersions(w http.ResponseWriter, r *http.Request) {
 }
 
 // versionBelow reports whether a concrete "x.y[.z]" version is older than
-// major.minor; "latest" and unparsable versions are not.
-func versionBelow(version string, major, minor int) bool {
+// major.minor (or major.minor.patch); "latest" and unparsable versions are not.
+func versionBelow(version string, major, minor int, patch ...int) bool {
 	parts := strings.SplitN(strings.TrimPrefix(version, "v"), ".", 3)
 	if len(parts) < 2 {
 		return false
@@ -1374,7 +1374,20 @@ func versionBelow(version string, major, minor int) bool {
 	if err1 != nil || err2 != nil {
 		return false
 	}
-	return ma < major || (ma == major && mi < minor)
+	if ma != major {
+		return ma < major
+	}
+	if mi != minor {
+		return mi < minor
+	}
+	if len(patch) == 0 {
+		return false
+	}
+	if len(parts) < 3 {
+		return patch[0] > 0
+	}
+	pa, err := strconv.Atoi(parts[2])
+	return err == nil && pa < patch[0]
 }
 
 // snellMajor returns the protocol major version a Snell binary serves.
