@@ -243,6 +243,7 @@ export function TemplateGroups({
 }
 
 type Check = {
+  serviceGroups: import("@/api").SubTemplateServiceGroup[];
   builder?: SubTemplateBuilder;
   summary: SubTemplateSummary;
   autoGroups: number;
@@ -663,6 +664,7 @@ function Editor({
                   </p>
                   <TemplateRulePreview
                     catalog={catalog}
+                    serviceGroups={check.serviceGroups}
                     value={check.builder}
                   />
                 </>

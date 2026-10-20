@@ -14,11 +14,14 @@ const builderMain = "节点选择"
 // TemplateBuilder is the editable recipe, kept alongside its generated profile.
 // Rules are evaluated in order; Final applies after every selected/custom rule.
 type TemplateBuilder struct {
-	Version int                    `json:"version"`
-	Preset  string                 `json:"preset"`
-	Groups  []TemplateBuilderGroup `json:"groups"`
-	Rules   []TemplateBuilderRule  `json:"rules"`
-	Final   string                 `json:"final"`
+	// Nil keeps existing visual templates on the current default: independent
+	// service selectors. Explicit false opts into shared routing targets.
+	ServiceGroups *bool                  `json:"serviceGroups,omitempty"`
+	Version       int                    `json:"version"`
+	Preset        string                 `json:"preset"`
+	Groups        []TemplateBuilderGroup `json:"groups"`
+	Rules         []TemplateBuilderRule  `json:"rules"`
+	Final         string                 `json:"final"`
 }
 
 type TemplateBuilderGroup struct {
@@ -200,6 +203,8 @@ func BuildSubscriptionTemplate(kind string, b TemplateBuilder) (string, error) {
 }
 
 func buildClashTemplate(b TemplateBuilder) string {
+	services := TemplateBuilderServiceGroups(TemplateClash, b)
+	targets := builderServiceTargets(services)
 	members := []string{}
 	for _, g := range b.Groups {
 		members = append(members, g.Name)
@@ -215,6 +220,9 @@ func buildClashTemplate(b TemplateBuilder) string {
 			v = append(v, yamlField{"url", "https://www.gstatic.com/generate_204"}, yamlField{"interval", 300})
 		}
 		groups = append(groups, v)
+	}
+	for _, g := range services {
+		groups = append(groups, yamlNode{{"name", g.Name}, {"type", "select"}, {"proxies", g.Members}, {"include-all", true}})
 	}
 	providers, rules := yamlNode{}, []string{}
 	seen, categories := map[string]bool{}, builderCategories()
@@ -232,6 +240,7 @@ func buildClashTemplate(b TemplateBuilder) string {
 		return tag
 	}
 	for _, r := range b.Rules {
+		r = builderRoutedRule(r, targets)
 		if r.Type == "category" {
 			s := categories[r.Value].set
 			for _, n := range s.sites {
@@ -244,7 +253,7 @@ func buildClashTemplate(b TemplateBuilder) string {
 			rules = append(rules, builderNativeRule(r))
 		}
 	}
-	rules = append(rules, "MATCH,"+b.Final)
+	rules = append(rules, "MATCH,"+builderFinal(b, targets))
 	return marshalYAML(yamlNode{{"mixed-port", 7890}, {"mode", "rule"}, {"ipv6", true},
 		{"dns", yamlNode{{"enable", true}, {"ipv6", true}, {"enhanced-mode", "fake-ip"}, {"fake-ip-range", "198.18.0.1/16"},
 			{"default-nameserver", []string{"223.5.5.5", "119.29.29.29"}}, {"proxy-server-nameserver", domesticDoH}, {"nameserver", domesticDoH}}},
@@ -252,6 +261,8 @@ func buildClashTemplate(b TemplateBuilder) string {
 }
 
 func buildSingboxTemplate(b TemplateBuilder) string {
+	services := TemplateBuilderServiceGroups(TemplateSingbox, b)
+	targets := builderServiceTargets(services)
 	members := []string{}
 	for _, g := range b.Groups {
 		members = append(members, g.Name)
@@ -272,6 +283,14 @@ func buildSingboxTemplate(b TemplateBuilder) string {
 		}
 		outbounds = append(outbounds, v)
 	}
+	for _, g := range services {
+		members := []string{}
+		for _, m := range g.Members {
+			members = append(members, ruleTarget(m, "direct"))
+		}
+		members = append(members, "{all}")
+		outbounds = append(outbounds, map[string]interface{}{"type": "selector", "tag": g.Name, "outbounds": members})
+	}
 	outbounds = append(outbounds, map[string]interface{}{"type": "direct", "tag": "direct"})
 	sets, rules := []interface{}{}, []interface{}{map[string]interface{}{"action": "sniff"}}
 	seen, categories := map[string]bool{}, builderCategories()
@@ -285,6 +304,7 @@ func buildSingboxTemplate(b TemplateBuilder) string {
 		return tag
 	}
 	for _, r := range b.Rules {
+		r = builderRoutedRule(r, targets)
 		v := map[string]interface{}{}
 		if r.Type == "category" {
 			tags := []string{}
@@ -312,7 +332,7 @@ func buildSingboxTemplate(b TemplateBuilder) string {
 		"inbounds":     []interface{}{map[string]interface{}{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080}},
 		"outbounds":    outbounds,
 		"http_clients": []interface{}{map[string]interface{}{"tag": "rules-http", "detour": builderMain}},
-		"route":        map[string]interface{}{"rules": rules, "rule_set": sets, "final": ruleTarget(b.Final, "direct"), "auto_detect_interface": true, "default_domain_resolver": "dns-local"},
+		"route":        map[string]interface{}{"rules": rules, "rule_set": sets, "final": ruleTarget(builderFinal(b, targets), "direct"), "auto_detect_interface": true, "default_domain_resolver": "dns-local"},
 		"experimental": map[string]interface{}{"cache_file": map[string]interface{}{"enabled": true}},
 	}
 	text, _ := json.MarshalIndent(profile, "", "  ")
@@ -332,6 +352,8 @@ func builderNativeRule(r TemplateBuilderRule) string {
 }
 
 func buildSurgeTemplate(b TemplateBuilder) string {
+	services := TemplateBuilderServiceGroups(TemplateSurge, b)
+	targets := builderServiceTargets(services)
 	var out strings.Builder
 	out.WriteString("[General]\nloglevel = notify\n\n[Proxy]\n\n[Proxy Group]\n")
 	members := []string{}
@@ -350,9 +372,13 @@ func buildSurgeTemplate(b TemplateBuilder) string {
 		}
 		out.WriteString(line + "\n")
 	}
+	for _, g := range services {
+		out.WriteString(g.Name + " = select, " + strings.Join(g.Members, ", ") + ", include-all-proxies=1\n")
+	}
 	out.WriteString("\n[Rule]\n")
 	categories := builderCategories()
 	for _, r := range b.Rules {
+		r = builderRoutedRule(r, targets)
 		if r.Type == "category" {
 			for _, n := range categories[r.Value].set.lists {
 				out.WriteString("RULE-SET," + listRuleURL("Surge", n, ".list") + "," + r.Target + "\n")
@@ -361,6 +387,6 @@ func buildSurgeTemplate(b TemplateBuilder) string {
 			out.WriteString(builderNativeRule(r) + "\n")
 		}
 	}
-	out.WriteString("FINAL," + b.Final + ",dns-failed\n")
+	out.WriteString("FINAL," + builderFinal(b, targets) + ",dns-failed\n")
 	return out.String()
 }

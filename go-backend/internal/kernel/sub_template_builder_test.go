@@ -21,6 +21,8 @@ func builderFixture() TemplateBuilder {
 
 func TestTemplateBuilderAllFormats(t *testing.T) {
 	b := builderFixture()
+	disabled := false
+	b.ServiceGroups = &disabled
 	for _, c := range TemplateRuleCategories() {
 		b.Rules = append(b.Rules, TemplateBuilderRule{Type: "category", Value: c.Key, Target: c.Target})
 	}
@@ -107,5 +109,65 @@ func TestTemplateBuilderRejectsInvalidRecipes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestServiceSelectorsDefaultAndRouting(t *testing.T) {
+	b := builderFixture()
+	b.Rules = []TemplateBuilderRule{{Type: "category", Value: "ai", Target: builderMain}, {Type: "category", Value: "cn", Target: "DIRECT"}, {Type: "category", Value: "ads", Target: "REJECT"}}
+	// Collision with a manually named node group must never change its references.
+	b.Groups = append(b.Groups, TemplateBuilderGroup{Name: "AI 服务", Type: "select"})
+	for _, kind := range TemplateFormats {
+		content, err := BuildSubscriptionTemplate(kind, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		groups := TemplateBuilderServiceGroups(kind, b)
+		summary, err := CheckTemplate(kind, content, []string{"US 01", "HK 01"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(summary.Groups) != len(groups)+3 {
+			t.Fatalf("%s groups: %+v", kind, summary)
+		}
+		for _, g := range groups {
+			if g.Members[0] != g.Target {
+				t.Fatalf("lost default: %+v", g)
+			}
+			if g.Key == "ai" && g.Name == "AI 服务" {
+				t.Fatal("name collision")
+			}
+			if !strings.Contains(content, g.Name) {
+				t.Fatalf("missing group: %+v", g)
+			}
+		}
+		body, _, err := Subscription(kind, namedEndpoints("US 01", "HK 01"), SubOptions{Templates: map[string]string{kind: content}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if kind == TemplateSingbox {
+			var cfg struct {
+				Route struct {
+					Rules []map[string]interface{} `json:"rules"`
+					Final string                   `json:"final"`
+				} `json:"route"`
+			}
+			if err := json.Unmarshal([]byte(body), &cfg); err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Route.Rules[1]["outbound"] == builderMain || cfg.Route.Rules[2]["outbound"] == "direct" || cfg.Route.Rules[3]["action"] != "reject" || cfg.Route.Final != "漏网之鱼" {
+				t.Fatalf("routing: %s", body)
+			}
+		} else if kind == TemplateClash {
+			var cfg struct {
+				Rules []string `yaml:"rules"`
+			}
+			if err := yaml.Unmarshal([]byte(body), &cfg); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasSuffix(cfg.Rules[0], ",AI 服务 · 分流 1") || cfg.Rules[len(cfg.Rules)-1] != "MATCH,漏网之鱼" {
+				t.Fatal(cfg.Rules)
+			}
+		}
 	}
 }

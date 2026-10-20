@@ -1,4 +1,8 @@
-import type { SubTemplateBuilder, SubTemplateCategory } from "@/api";
+import type {
+  SubTemplateBuilder,
+  SubTemplateCategory,
+  SubTemplateServiceGroup,
+} from "@/api";
 
 import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
@@ -34,6 +38,7 @@ const RULE_TYPES = [
 
 export const newTemplateBuilder = (): SubTemplateBuilder => ({
   version: 1,
+  serviceGroups: true,
   preset: "balanced",
   groups: [{ name: "自动选择", type: "url-test", filter: "" }],
   rules: [],
@@ -262,13 +267,30 @@ export function TemplateBuilder({
         )}
       </div>
 
+      <label className="flex items-start gap-2 rounded-xl border border-divider p-3 text-sm">
+        <input
+          checked={value.serviceGroups !== false}
+          className="mt-0.5 accent-primary"
+          type="checkbox"
+          onChange={(e) =>
+            onChange({ ...value, serviceGroups: e.target.checked })
+          }
+        />
+        <span>
+          按服务生成独立策略组
+          <span className="mt-1 block text-xs text-default-500">
+            每个已选类别和兜底各有一个选择组，可在客户端单独选节点。规则去向作为该组的默认选择；sing-box
+            的拦截规则直接拒绝。
+          </span>
+        </span>
+      </label>
       <details className="rounded-xl border border-divider p-3">
         <summary className="cursor-pointer text-sm font-medium">
           规则去向与顺序 · {value.rules.length} 条
         </summary>
         <p className="my-3 text-xs text-default-500">
           从上往下匹配，第一条命中后生效。可把具体规则放在
-          Google、微软、国内服务等大类前面。
+          Google、微软、国内服务等大类前面。启用独立策略组时，类别的去向为组内默认选择。
         </p>
         <div className="space-y-2">
           {value.rules.map((r, i) => (
@@ -405,7 +427,7 @@ export function TemplateBuilder({
 
       <details className="rounded-xl border border-divider p-3">
         <summary className="cursor-pointer text-sm font-medium">
-          策略组 · {value.groups.length} 个
+          节点分组 · {value.groups.length} 个
         </summary>
         <p className="my-3 text-xs text-default-500">
           节点选择包含所有分组和节点。下面的分组按节点名称过滤；过滤留空即包含所有节点。
@@ -524,9 +546,11 @@ export function TemplateBuilder({
 export function TemplateRulePreview({
   value,
   catalog,
+  serviceGroups,
 }: {
   value: SubTemplateBuilder;
   catalog: SubTemplateCategory[];
+  serviceGroups: SubTemplateServiceGroup[];
 }) {
   const target = (to: string) => (
     <span
@@ -535,6 +559,26 @@ export function TemplateRulePreview({
       {to === "DIRECT" ? "直连" : to === "REJECT" ? "拦截" : `代理 · ${to}`}
     </span>
   );
+
+  const routeTarget = (key: string, fallback: string) => {
+    const group = serviceGroups.find((g) => g.key === key);
+
+    return group ? (
+      <span className="text-right text-xs">
+        <span className="block text-primary">服务组 · {group.name}</span>
+        <span className="text-default-500">
+          默认：
+          {group.target === "DIRECT"
+            ? "直连"
+            : group.target === "REJECT"
+              ? "拦截"
+              : group.target}
+        </span>
+      </span>
+    ) : (
+      target(fallback)
+    );
+  };
 
   return (
     <div className="overflow-hidden rounded-xl border border-divider">
@@ -574,7 +618,7 @@ export function TemplateRulePreview({
             <span aria-hidden className="text-default-400">
               →
             </span>
-            {target(r.target)}
+            {routeTarget(r.type === "category" ? r.value : "", r.target)}
           </div>
         );
       })}
@@ -585,7 +629,7 @@ export function TemplateRulePreview({
         <span aria-hidden className="text-default-400">
           →
         </span>
-        {target(value.final)}
+        {routeTarget("__final", value.final)}
       </div>
     </div>
   );

@@ -849,6 +849,8 @@ export interface InboundApiItem {
   transport: InboundTransport;
   security: InboundSecurity;
   extra: string;
+  shareAddressMode?: "auto" | "ipv4" | "ipv6" | "custom";
+  shareAddress?: string;
   shareHost: string;
   remark: string;
   relayOnly: boolean;
@@ -890,6 +892,7 @@ export interface InboundMutationPayload {
   transport: InboundTransport;
   security: InboundSecurity;
   extra: string;
+  shareAddressMode?: "auto" | "ipv4" | "ipv6" | "custom";
   shareHost: string;
   remark: string;
   relayOnly: boolean;

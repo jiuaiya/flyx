@@ -721,7 +721,14 @@ export interface SubPipeline {
   /** Subscription template id per client kind; a kind without one gets the built-in profile. */
   templates?: Partial<Record<SubTemplateKind, number>>;
 }
+export interface SubTemplateServiceGroup {
+  key: string;
+  name: string;
+  target: string;
+  members: string[];
+}
 export interface SubTemplateBuilder {
+  serviceGroups?: boolean;
   version: 1;
   preset: "minimal" | "balanced" | "full" | "custom";
   groups: Array<{ name: string; type: "select" | "url-test"; filter: string }>;
@@ -795,6 +802,7 @@ export const checkSubTemplate = (
   data: Omit<SubTemplateDraft, "id" | "name"> & { subscriptionId?: number },
 ) =>
   Network.post<{
+    serviceGroups: SubTemplateServiceGroup[];
     summary: SubTemplateSummary;
     autoGroups: number;
     sample: string;

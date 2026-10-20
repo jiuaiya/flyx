@@ -36,10 +36,9 @@ type subTemplateView struct {
 	Rules      int `json:"rules"`
 }
 
-func templateView(t *model.SubscriptionTemplate, usedBy int) subTemplateView {
-	v := subTemplateView{ID: t.ID, Name: t.Name, Kind: t.Kind, Content: t.Content, SourceURL: t.SourceURL,
-		LastFetch: t.LastFetch, LastError: t.LastError, UpdatedTime: t.UpdatedTime, UsedBy: usedBy}
-	if t.BuilderConfig != "" {
+// effectiveTemplate rebuilds visual recipes on read without rewriting user data.
+func effectiveTemplate(t *model.SubscriptionTemplate) (string, *kernel.TemplateBuilder) {
+	if t.BuilderConfig != "" && t.SourceURL == "" {
 		var b kernel.TemplateBuilder
 		if json.Unmarshal([]byte(t.BuilderConfig), &b) == nil {
 			if b.Groups == nil {
@@ -48,10 +47,19 @@ func templateView(t *model.SubscriptionTemplate, usedBy int) subTemplateView {
 			if b.Rules == nil {
 				b.Rules = []kernel.TemplateBuilderRule{}
 			}
-			v.Builder = &b
+			if content, err := kernel.BuildSubscriptionTemplate(t.Kind, b); err == nil {
+				return content, &b
+			}
 		}
 	}
-	if s, err := kernel.CheckTemplate(t.Kind, t.Content, nil); err == nil {
+	return t.Content, nil
+}
+
+func templateView(t *model.SubscriptionTemplate, usedBy int) subTemplateView {
+	v := subTemplateView{ID: t.ID, Name: t.Name, Kind: t.Kind, Content: t.Content, SourceURL: t.SourceURL,
+		LastFetch: t.LastFetch, LastError: t.LastError, UpdatedTime: t.UpdatedTime, UsedBy: usedBy}
+	v.Content, v.Builder = effectiveTemplate(t)
+	if s, err := kernel.CheckTemplate(t.Kind, v.Content, nil); err == nil {
 		v.Groups, v.AutoGroups, v.Rules = len(s.Groups), s.AutoGroups(), s.Rules
 	}
 	return v
@@ -89,7 +97,7 @@ func (h *Handler) subOptions(p subPipeline) kernel.SubOptions {
 			if opts.Templates == nil {
 				opts.Templates = map[string]string{}
 			}
-			opts.Templates[kind] = t.Content
+			opts.Templates[kind], _ = effectiveTemplate(t)
 		}
 	}
 	return opts
@@ -257,8 +265,12 @@ func (h *Handler) subscriptionTemplateCheck(w http.ResponseWriter, r *http.Reque
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	services := []kernel.TemplateServiceGroup{}
+	if req.Builder != nil {
+		services = kernel.TemplateBuilderServiceGroups(req.Kind, *req.Builder)
+	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
-		"summary": summary, "autoGroups": summary.AutoGroups(), "sample": sample, "nodes": len(names), "content": content,
+		"serviceGroups": services, "summary": summary, "autoGroups": summary.AutoGroups(), "sample": sample, "nodes": len(names), "content": content,
 	}))
 }
 

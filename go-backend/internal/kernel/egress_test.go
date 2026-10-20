@@ -267,7 +267,7 @@ func TestIPv4OnlyExtraCannotBypassPolicy(t *testing.T) {
 }
 
 func TestRestrictedLocalDNSVersionCompatibility(t *testing.T) {
-	for _, policy := range []string{OutboundIPv4Only, OutboundIPv6Only, OutboundPreferIPv4, OutboundPreferIPv6} {
+	for _, policy := range []string{OutboundIPAuto, OutboundIPv4Only, OutboundIPv6Only, OutboundPreferIPv4, OutboundPreferIPv6} {
 		for _, preferGo := range []bool{false, true} {
 			in := Inbound{ID: 1, Protocol: ProtocolVLESS, Listen: "::", Port: 8388, OutboundIPStrategy: policy}
 			if err := Normalize(TypeSingbox, &in); err != nil {
@@ -278,6 +278,12 @@ func TestRestrictedLocalDNSVersionCompatibility(t *testing.T) {
 				t.Fatal(err)
 			}
 			cfg := renderJSONString(t, r.Files[0].Content)
+			if policy == OutboundIPAuto && !preferGo {
+				if cfg["dns"] != nil {
+					t.Fatal("legacy automatic DNS must stay compatible")
+				}
+				continue
+			}
 			resolver := cfg["dns"].(map[string]interface{})["servers"].([]interface{})[0].(map[string]interface{})
 			if preferGo && resolver["prefer_go"] != true {
 				t.Fatalf("modern local resolver must bypass unavailable systemd DBus: %v", resolver)
