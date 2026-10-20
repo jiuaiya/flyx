@@ -123,6 +123,7 @@ export const createTunnelFormDefaults = () => {
     ipPreference: "",
     probeTargetHost: "",
     probeTargetPort: 0,
+    engine: "",
     status: 1,
   };
 };

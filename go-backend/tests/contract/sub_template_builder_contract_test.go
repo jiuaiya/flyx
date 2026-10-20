@@ -49,6 +49,19 @@ func TestSubscriptionTemplateBuilderContract(t *testing.T) {
 			if !strings.Contains(body, "US-test") || !strings.Contains(body, "example.com") || strings.Contains(body, "{all}") {
 				t.Fatal(body)
 			}
+			if kind == "clash" {
+				// New visual recipes also use upstream's Mihomo-compatible slots.
+				for _, slot := range []string{"stash", "shadowrocket"} {
+					res := post("/api/v1/subscription/save", `{"id":`+subID+`,"name":"builder-test","sourceAll":true,"options":{"templates":{"`+slot+`":`+id+`}}}`)
+					if res.Code != 0 {
+						t.Fatal(res.Msg)
+					}
+					body := getSub(t, router, path+"?format="+slot, "").Body.String()
+					if !strings.Contains(body, "example.com") || !strings.Contains(body, "漏网之鱼") || strings.Contains(body, "include-all") {
+						t.Fatalf("visual template not expanded for %s: %s", slot, body)
+					}
+				}
+			}
 			list := post("/api/v1/subscription/template/list", `{}`).Data.([]interface{})
 			found := false
 			for _, item := range list {

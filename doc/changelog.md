@@ -78,6 +78,22 @@
 - 安装、节点安装命令、升级下载和 Docker 镜像统一使用 `jiuaiya/flyx` 自有发布。
 - **升级**：已有节点无需升级 agent；sing-box 内核需 1.12 及以上。升级面板后，在入站高级选项或“分流”中设置并下发。
 
+## 3.3.26
+
+2026-10-20
+
+- 中转支持 realm 转发引擎：端口转发隧道在编辑时可以把 **转发引擎** 选为 realm，入口节点会自动安装 realm 来跑这条隧道的转发，占用更低；TCP / UDP、多目标负载、Proxy Protocol 和流量统计照常可用，不支持限速和连接数限制，见 [realm 引擎](./guide/forward.md#realm-引擎)
+- 已有隧道可以随时切换引擎，面板会把转发规则迁移过去
+- **升级**：realm 引擎需要把节点 agent 升级到 3.3.26 及以上
+
+## 3.3.25
+
+2026-10-20
+
+- 订阅模板支持 Stash 和 Shadowrocket：在订阅的 **规则** 页给它们选一个 Mihomo 格式的模板（可以和 Mihomo 共用），面板会把 `include-all` / `filter` 策略组展开成节点列表；Shadowrocket 选了模板后改为导入完整配置，见 [订阅模板](./guide/subscription-templates.md#在订阅里使用)
+- 模板检查会提醒 `mrs` 格式的规则集只有 Mihomo 能读
+- 新增 [在线演示](https://kure29.github.io/flyx/demo/)：不用安装就能看看面板长什么样
+
 ## 3.3.24
 
 2026-10-20
