@@ -71,20 +71,6 @@ func applyOutboundIPPolicies(kernelType string, cfg obj, inbounds []Inbound, pre
 		}
 	}
 	if len(restricted) == 0 {
-		// Modern sing-box's implicit resolver uses systemd-resolved over
-		// DBus. Debian servers often have no resolved service; this also
-		// breaks inbound REALITY/ShadowTLS camouflage handshakes. Automatic
-		// egress needs the same explicit Go resolver as restricted egress.
-		if kernelType == TypeSingbox && preferGoDNS {
-			const tag = "flvx-local-resolver"
-			cfg["dns"] = obj{"servers": []interface{}{obj{"type": "local", "tag": tag, "prefer_go": true}}}
-			route, _ := cfg["route"].(obj)
-			if route == nil {
-				route = obj{}
-				cfg["route"] = route
-			}
-			route["default_domain_resolver"] = tag
-		}
 		return nil
 	}
 	routeKey, inboundKey, outboundKey, userKey := "route", "inbound", "outbound", "auth_user"

@@ -4,6 +4,15 @@
 
 完整的提交记录见 [GitHub Releases](https://github.com/jiuaiya/flyx/releases)。
 
+## 3.3.26.2
+
+2026-10-21
+
+- 修复 GitHub 加速在前后端默认值不一致的问题：未保存设置时统一关闭，更新检测和下载默认直连 GitHub；已保存的开关和加速地址保持不变。
+- 同步原仓库最新修复：sing-box 自动模式在无 systemd-resolved 时使用 Go DNS 解析，以及订阅有中转时优先显示中转。
+- 合并自动模式 DNS 配置逻辑，保留 IPv4 / IPv6 出站策略的解析和路由行为。
+- **升级**：仅需升级面板，节点 agent 无需升级。
+
 ## 3.3.26.1
 
 2026-10-21
