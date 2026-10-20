@@ -148,3 +148,24 @@ func TestIPv4OnlyExtraCannotBypassPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestIPv4OnlyLocalDNSVersionCompatibility(t *testing.T) {
+	for _, preferGo := range []bool{false, true} {
+		in := Inbound{ID: 1, Protocol: ProtocolVLESS, Listen: "::", Port: 8388, OutboundIPStrategy: OutboundIPv4Only}
+		if err := Normalize(TypeSingbox, &in); err != nil {
+			t.Fatal(err)
+		}
+		r, err := RenderWith(TypeSingbox, []Inbound{in}, RenderOptions{SingboxPreferGoDNS: preferGo})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := renderJSONString(t, r.Files[0].Content)
+		resolver := cfg["dns"].(map[string]interface{})["servers"].([]interface{})[0].(map[string]interface{})
+		if preferGo && resolver["prefer_go"] != true {
+			t.Fatalf("modern local resolver must bypass unavailable systemd DBus: %v", resolver)
+		}
+		if !preferGo && resolver["prefer_go"] != nil {
+			t.Fatalf("sing-box 1.12 must not receive the unsupported prefer_go field: %v", resolver)
+		}
+	}
+}

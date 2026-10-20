@@ -4,6 +4,13 @@
 
 完整的提交记录见 [GitHub Releases](https://github.com/jiuaiya/flyx/releases)。
 
+## 3.3.25.2
+
+2026-10-20
+
+- 修复“仅 IPv4 出站”在部分 Debian 服务器上的域名解析失败：sing-box 1.13+ 使用系统 DNS 配置直接解析，不再依赖未运行的 systemd-resolved DBus 服务；sing-box 1.12 保持原有兼容配置。
+- **升级**：只需升级面板，节点 agent 无需升级。
+
 ## 3.3.25.1
 
 2026-10-20

@@ -54,7 +54,7 @@ func ValidateOutboundIPExtra(kernelType, strategy string, extra json.RawMessage)
 // applyOutboundIPPolicies runs after chain/split/user rules have been built.
 // Only scoped direct outbounds are cloned; their user accounting marks remain
 // intact and automatic inbounds keep using the original shared outbounds.
-func applyOutboundIPPolicies(kernelType string, cfg obj, inbounds []Inbound) error {
+func applyOutboundIPPolicies(kernelType string, cfg obj, inbounds []Inbound, preferGoDNS bool) error {
 	var restricted []Inbound
 	for _, in := range inbounds {
 		strategy, err := NormalizeOutboundIPStrategy(kernelType, in.OutboundIPStrategy)
@@ -192,7 +192,11 @@ func applyOutboundIPPolicies(kernelType string, cfg obj, inbounds []Inbound) err
 	route["rules"] = append(append(append(append(prefix, preprocess...), scoped...), fallback...), shared...)
 	if kernelType == TypeSingbox {
 		route["final"] = "direct"
-		cfg["dns"] = obj{"servers": []interface{}{obj{"type": "local", "tag": ipv4ResolverTag}}}
+		resolver := obj{"type": "local", "tag": ipv4ResolverTag}
+		if preferGoDNS {
+			resolver["prefer_go"] = true
+		}
+		cfg["dns"] = obj{"servers": []interface{}{resolver}}
 	}
 	cfg["outbounds"] = outbounds
 	return nil

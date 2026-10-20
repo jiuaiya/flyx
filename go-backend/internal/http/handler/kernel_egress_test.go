@@ -9,6 +9,14 @@ import (
 )
 
 func TestOutboundIPVersionAndChain(t *testing.T) {
+	for _, version := range []string{"1.13.0", "1.14.3", "latest"} {
+		if !kernelCaps(version).SingboxPreferGoDNS {
+			t.Fatalf("%s must prefer Go DNS", version)
+		}
+	}
+	if kernelCaps("1.12.0").SingboxPreferGoDNS {
+		t.Fatal("sing-box 1.12 does not support prefer_go")
+	}
 	for _, version := range []string{"1.11.15", "v1.10.0"} {
 		if err := validateOutboundIPVersion(kernel.TypeSingbox, version, kernel.OutboundIPv4Only); err == nil {
 			t.Fatalf("old sing-box %s accepted", version)
@@ -36,5 +44,20 @@ func TestOutboundIPVersionAndChain(t *testing.T) {
 	}
 	if err := h.checkKernelVersionFits(box.ID, kernel.TypeSingbox, "1.11.15"); err == nil || !strings.Contains(err.Error(), "1.12") {
 		t.Fatalf("downgrade must not silently remove IPv4 policy: %v", err)
+	}
+	entry.OutboundID = 0
+	if err := r.SaveNodeInbound(entry); err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []string{"1.12.0", "1.13.0", "latest"} {
+		box.Version = version
+		payload, _, err := h.buildKernelApplyPayload(box)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := payload["files"].([]kernel.File)[0].Content
+		if got := strings.Contains(cfg, `"prefer_go": true`); got != (version != "1.12.0") {
+			t.Fatalf("local DNS compatibility for %s: prefer_go=%v", version, got)
+		}
 	}
 }
