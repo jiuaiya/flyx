@@ -12,7 +12,7 @@
 使用以下命令即可快速安装面板：
 
 ```bash
-curl -L https://github.com/kure29/flyx/releases/latest/download/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
+curl -L https://github.com/jiuaiya/flyx/releases/latest/download/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
 **安装过程中会提示输入以下信息：**

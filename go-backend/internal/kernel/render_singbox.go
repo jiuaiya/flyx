@@ -68,6 +68,9 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 		}
 		cfg["route"] = route
 	}
+	if err := applyOutboundIPPolicies(TypeSingbox, cfg, inbounds); err != nil {
+		return "", err
+	}
 	return marshalConfig(cfg)
 }
 

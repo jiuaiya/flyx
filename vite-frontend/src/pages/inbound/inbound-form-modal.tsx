@@ -28,6 +28,7 @@ import {
   vlessEncAllowed,
 } from "./presets";
 import { DROP_NOTICE, savedDespiteDrop } from "./save-recovery";
+import { OutboundIPSelect } from "./outbound-ip-select";
 
 import { createInbound, updateInbound } from "@/api";
 import { Button } from "@/shadcn-bridge/heroui/button";
@@ -77,14 +78,16 @@ export function InboundFormModal({
   const [form, setForm] = useState<InboundForm>(initial);
   const [initialKey, setInitialKey] = useState(initial);
   const [saving, setSaving] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(
+    initial.outboundIpStrategy === "ipv4_only",
+  );
   const isEdit = Boolean(initial.id);
 
   // Reset when the parent opens the modal with a different item.
   if (initialKey !== initial) {
     setInitialKey(initial);
     setForm(initial);
-    setShowAdvanced(false);
+    setShowAdvanced(initial.outboundIpStrategy === "ipv4_only");
   }
 
   const set = <K extends keyof InboundForm>(key: K, value: InboundForm[K]) =>
@@ -962,6 +965,11 @@ export function InboundFormModal({
                         onChange={(e) => set("shareHost", e.target.value)}
                       />
                     </div>
+                    <OutboundIPSelect
+                      kernelType={form.kernelType}
+                      value={form.outboundIpStrategy}
+                      onChange={(value) => set("outboundIpStrategy", value)}
+                    />
                     <div className="space-y-3 rounded-xl border border-divider p-3">
                       <p className="text-sm font-medium">中转相关</p>
                       <div className="flex items-start gap-2">

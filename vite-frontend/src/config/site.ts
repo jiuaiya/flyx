@@ -26,7 +26,7 @@ const SENSITIVE_CONFIG_KEYS = new Set([
   "cloudflare_secret_key",
 ]);
 const GITHUB_REPO =
-  import.meta.env.VITE_GITHUB_REPO || "https://github.com/kure29/flyx";
+  import.meta.env.VITE_GITHUB_REPO || "https://github.com/jiuaiya/flyx";
 
 const shouldPersistConfigKey = (key: string) => {
   return !SENSITIVE_CONFIG_KEYS.has(key.trim().toLowerCase());

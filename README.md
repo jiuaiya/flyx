@@ -4,11 +4,13 @@
 
 # FLYX
 
+本分支由 `jiuaiya/flyx` 构建和发布，提供每个入站独立的“仅 IPv4 出站”策略，保留 IPv6 入站。[配置说明](doc/guide/routing.md#出站-ip-策略jiuaiya-分支)
+
 转发 + 节点搭建面板
 
 在一个面板里管理中转与落地：一键部署 Xray / sing-box / Snell 节点，对接中转，生成订阅。
 
-[使用文档](https://kure29.github.io/flyx/) · [快速上手](https://kure29.github.io/flyx/guide/getting-started) · [下载](https://github.com/kure29/flyx/releases) · [Telegram 交流群](https://t.me/flyx_chat)
+[使用文档](https://kure29.github.io/flyx/) · [快速上手](https://kure29.github.io/flyx/guide/getting-started) · [下载](https://github.com/jiuaiya/flyx/releases) · [Telegram 交流群](https://t.me/flyx_chat)
 
 </div>
 
@@ -27,7 +29,7 @@
 面板（需要 Docker）：
 
 ```bash
-curl -L https://github.com/kure29/flyx/releases/latest/download/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
+curl -L https://github.com/jiuaiya/flyx/releases/latest/download/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
 选 `1. 安装面板`，完成后访问 `http://服务器IP:6366`，默认账号 `admin_user` / `admin_user`，登录后请立即修改密码。

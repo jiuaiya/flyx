@@ -2,7 +2,15 @@
 
 每个版本的主要变化。**升级** 一行说明除了面板以外还要不要升级节点 agent；没写的只需升级面板，见 [升级](./guide/upgrade.md)。
 
-完整的提交记录见 [GitHub Releases](https://github.com/kure29/flyx/releases)。
+完整的提交记录见 [GitHub Releases](https://github.com/jiuaiya/flyx/releases)。
+
+## 3.3.25.1
+
+2026-10-20
+
+- 入站新增“出站 IP 策略”：可选自动或仅 IPv4；保留 IPv6 入站，只解析和连接 IPv4，并拒绝 IPv6 目标。支持 Xray 和 sing-box 1.12+，各入站独立生效，保留用户流量统计与分流、链式路由。
+- 安装、节点安装命令、升级下载和 Docker 镜像统一使用 `jiuaiya/flyx` 自有发布。
+- **升级**：已有节点无需升级 agent；sing-box 内核需 1.12 及以上。升级面板后，在入站高级选项或“分流”中设置并下发。
 
 ## 3.3.24
 
@@ -123,7 +131,7 @@
 
 2026-10-19
 
-- 项目改名为 FLYX，仓库改为 `kure29/flyx`；已有的面板和节点不受影响
+- 项目改名为 FLYX，仓库改为 `jiuaiya/flyx`；已有的面板和节点不受影响
 
 ## 3.3.7
 

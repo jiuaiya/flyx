@@ -8,7 +8,7 @@ COPY . .
 ARG TARGETOS
 ARG TARGETARCH
 # owner/repo whose releases the panel installs nodes and upgrades from.
-ARG GITHUB_REPO
+ARG GITHUB_REPO=jiuaiya/flyx
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} env ${TARGETARCH:+GOARCH=${TARGETARCH}} go build -ldflags="${GITHUB_REPO:+-X 'go-backend/internal/http/handler.githubRepo=${GITHUB_REPO}'}" -o /out/paneld ./cmd/paneld
 
 FROM docker:27-cli AS dockercli

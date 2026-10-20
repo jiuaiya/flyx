@@ -1,6 +1,6 @@
 # 常见问题
 
-这里没找到答案的话，可以到 [Telegram 交流群](https://t.me/flyx_chat) 问，或者在 GitHub [提交 issue](https://github.com/kure29/flyx/issues/new/choose)。
+这里没找到答案的话，可以到 [Telegram 交流群](https://t.me/flyx_chat) 问，或者在 GitHub [提交 issue](https://github.com/jiuaiya/flyx/issues/new/choose)。
 
 ## 面板
 

@@ -1,0 +1,40 @@
+package handler
+
+import (
+	"strings"
+	"testing"
+
+	"go-backend/internal/kernel"
+	"go-backend/internal/store/repo"
+)
+
+func TestOutboundIPVersionAndChain(t *testing.T) {
+	for _, version := range []string{"1.11.15", "v1.10.0"} {
+		if err := validateOutboundIPVersion(kernel.TypeSingbox, version, kernel.OutboundIPv4Only); err == nil {
+			t.Fatalf("old sing-box %s accepted", version)
+		}
+	}
+	for _, version := range []string{"1.12.0", "1.14.3", "latest"} {
+		if err := validateOutboundIPVersion(kernel.TypeSingbox, version, kernel.OutboundIPv4Only); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := repo.Open(t.TempDir() + "/egress.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "unit-test-secret")
+	front := seedRelayTargetNode(t, r, "front", "198.51.100.1")
+	landing := seedRelayTargetNode(t, r, "v6-only", "2001:db8::2")
+	box := seedChainKernel(t, r, front, kernel.TypeSingbox)
+	exit := seedChainKernel(t, r, landing, kernel.TypeXray)
+	target := seedChainInbound(t, r, exit, "target", kernel.Inbound{Protocol: kernel.ProtocolShadowsocks, Port: 8388}, 0)
+	entry := seedChainInbound(t, r, box, "entry", kernel.Inbound{Protocol: kernel.ProtocolShadowsocks, Port: 8389, OutboundIPStrategy: kernel.OutboundIPv4Only}, target.ID)
+	if err := h.validateChain(*entry, kernel.TypeSingbox); err == nil || !strings.Contains(err.Error(), "IPv6") {
+		t.Fatalf("IPv6 next hop must fail before saving: %v", err)
+	}
+	if err := h.checkKernelVersionFits(box.ID, kernel.TypeSingbox, "1.11.15"); err == nil || !strings.Contains(err.Error(), "1.12") {
+		t.Fatalf("downgrade must not silently remove IPv4 policy: %v", err)
+	}
+}
