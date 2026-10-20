@@ -46,6 +46,15 @@ func TestInboundOutboundIPStrategyContract(t *testing.T) {
 		t.Fatalf("reset: %+v", out)
 	}
 	assertPolicy("auto")
+	out = kernelContractPost(t, router, admin, "/api/v1/inbound/update", `{"id":`+jsonInt64(id)+`,`+base+`,"extra":"{\"tag\":\"custom\"}","outboundIpStrategy":"auto"}`)
+	if out.Code != 0 {
+		t.Fatalf("automatic advanced configuration: %+v", out)
+	}
+	out = kernelContractPost(t, router, admin, "/api/v1/inbound/split", `{"id":`+jsonInt64(id)+`,"outboundIpStrategy":"ipv4_only"}`)
+	if out.Code == 0 || !strings.Contains(out.Msg, "tag") {
+		t.Fatalf("split endpoint must reject conflicting advanced routing before saving: %+v", out)
+	}
+	assertPolicy("auto")
 	// Existing database callers receive the migration's automatic default.
 	if err := r.DB().Exec(`INSERT INTO node_inbound(kernel_id,node_id,name,protocol,port,created_time,updated_time) SELECT kernel_id,node_id,'legacy','shadowsocks',8390,created_time,updated_time FROM node_inbound WHERE id = ?`, id).Error; err != nil {
 		t.Fatal(err)

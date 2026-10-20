@@ -29,6 +29,28 @@ func NormalizeOutboundIPStrategy(kernelType, strategy string) (string, error) {
 	return strategy, nil
 }
 
+// Extra JSON may customize an inbound, but changing its routing identity or
+// detouring into another inbound would bypass an inbound-scoped IP policy.
+func ValidateOutboundIPExtra(kernelType, strategy string, extra json.RawMessage) error {
+	policy, err := NormalizeOutboundIPStrategy(kernelType, strategy)
+	if err != nil {
+		return err
+	}
+	if policy != OutboundIPv4Only || len(extra) == 0 {
+		return nil
+	}
+	var fields map[string]interface{}
+	if err := json.Unmarshal(extra, &fields); err != nil {
+		return fmt.Errorf("高级配置必须是 JSON 对象")
+	}
+	for _, key := range []string{"tag", "detour"} {
+		if _, exists := fields[key]; exists {
+			return fmt.Errorf("仅 IPv4 出站时，高级配置不能覆盖 %s 字段", key)
+		}
+	}
+	return nil
+}
+
 // applyOutboundIPPolicies runs after chain/split/user rules have been built.
 // Only scoped direct outbounds are cloned; their user accounting marks remain
 // intact and automatic inbounds keep using the original shared outbounds.

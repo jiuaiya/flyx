@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -127,5 +128,23 @@ func TestIPv4OnlyShadowTLSAndValidation(t *testing.T) {
 	}
 	if got, err := NormalizeOutboundIPStrategy(TypeSnell, ""); err != nil || got != OutboundIPAuto {
 		t.Fatalf("old configurations must remain automatic: %q %v", got, err)
+	}
+}
+
+func TestIPv4OnlyExtraCannotBypassPolicy(t *testing.T) {
+	for _, kt := range []string{TypeXray, TypeSingbox} {
+		for _, extra := range []string{`{"tag":"custom"}`, `{"detour":"in-2"}`} {
+			in := Inbound{ID: 1, Protocol: ProtocolVLESS, Port: 8388, Extra: json.RawMessage(extra), OutboundIPStrategy: OutboundIPv4Only}
+			if err := Normalize(kt, &in); err == nil {
+				t.Fatalf("%s normalization accepted conflicting extra %s", kt, extra)
+			}
+			if _, err := Render(kt, []Inbound{in}); err == nil {
+				t.Fatalf("%s rendering accepted conflicting extra %s", kt, extra)
+			}
+			in.OutboundIPStrategy = OutboundIPAuto
+			if err := Normalize(kt, &in); err != nil {
+				t.Fatalf("automatic inbounds must retain advanced customization: %v", err)
+			}
+		}
 	}
 }

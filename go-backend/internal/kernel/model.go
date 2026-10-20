@@ -286,7 +286,7 @@ func Normalize(kernelType string, in *Inbound) error {
 		return errors.New("WireGuard 走 UDP，不支持获取真实 IP（PROXY protocol）")
 	}
 
-	if err := normalizeExtra(in); err != nil {
+	if err := normalizeExtra(kernelType, in); err != nil {
 		return err
 	}
 	if err := normalizeTransport(&in.Transport); err != nil {
@@ -316,7 +316,7 @@ func Normalize(kernelType string, in *Inbound) error {
 	return nil
 }
 
-func normalizeExtra(in *Inbound) error {
+func normalizeExtra(kernelType string, in *Inbound) error {
 	raw := strings.TrimSpace(string(in.Extra))
 	if raw == "" || raw == "null" || raw == "{}" {
 		in.Extra = nil
@@ -330,7 +330,7 @@ func normalizeExtra(in *Inbound) error {
 		return errors.New("高级配置必须是 JSON 对象")
 	}
 	in.Extra = json.RawMessage(raw)
-	return nil
+	return ValidateOutboundIPExtra(kernelType, in.OutboundIPStrategy, in.Extra)
 }
 
 func normalizeTransport(t *Transport) error {
