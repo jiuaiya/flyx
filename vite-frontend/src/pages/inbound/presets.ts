@@ -121,7 +121,7 @@ export interface InboundForm {
   whitelistExtra: string;
   /** Chained outbound inbound id; "" leaves directly. */
   outboundId: string;
-  outboundIpStrategy: "auto" | "ipv4_only";
+  outboundIpStrategy: "auto" | "ipv4_only" | "ipv6_only";
   splitRules: SplitRuleForm[];
   enabled: boolean;
 }

@@ -167,10 +167,8 @@ func (h *Handler) validateChainFor(row model.NodeInbound, kernelType, version st
 		if err != nil {
 			return fmt.Errorf("%s：%v", what, err)
 		}
-		if row.OutboundIPStrategy == kernel.OutboundIPv4Only {
-			if ip := net.ParseIP(strings.Trim(e.Host, "[]")); ip != nil && ip.To4() == nil {
-				return fmt.Errorf("%s使用 IPv6 地址，仅 IPv4 出站无法连接，请改用 IPv4 地址或域名", what)
-			}
+		if err := kernel.ValidateOutboundIPServer(row.OutboundIPStrategy, e.Host); err != nil {
+			return fmt.Errorf("%s：%w", what, err)
 		}
 		if err := kernel.CheckChainWith(kernelType, e, caps); err != nil {
 			return fmt.Errorf("%s：%v", what, err)

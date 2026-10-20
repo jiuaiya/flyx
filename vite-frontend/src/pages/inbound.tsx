@@ -630,14 +630,15 @@ export default function InboundPage() {
 
     const badges = (
       <>
-        {item.outboundIpStrategy === "ipv4_only" && (
+        {(item.outboundIpStrategy === "ipv4_only" ||
+          item.outboundIpStrategy === "ipv6_only") && (
           <Chip
             className="shrink-0 whitespace-nowrap"
             color="primary"
             size="sm"
             variant="flat"
           >
-            IPv4 出站
+            {item.outboundIpStrategy === "ipv6_only" ? "IPv6" : "IPv4"} 出站
           </Chip>
         )}
         {item.relayCount > 0 && (

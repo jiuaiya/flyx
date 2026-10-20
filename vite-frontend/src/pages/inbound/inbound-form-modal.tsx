@@ -79,7 +79,7 @@ export function InboundFormModal({
   const [initialKey, setInitialKey] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(
-    initial.outboundIpStrategy === "ipv4_only",
+    initial.outboundIpStrategy !== "auto",
   );
   const isEdit = Boolean(initial.id);
 
@@ -87,7 +87,7 @@ export function InboundFormModal({
   if (initialKey !== initial) {
     setInitialKey(initial);
     setForm(initial);
-    setShowAdvanced(initial.outboundIpStrategy === "ipv4_only");
+    setShowAdvanced(initial.outboundIpStrategy !== "auto");
   }
 
   const set = <K extends keyof InboundForm>(key: K, value: InboundForm[K]) =>

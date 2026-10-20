@@ -10,7 +10,9 @@ import (
 const (
 	OutboundIPAuto   = "auto"
 	OutboundIPv4Only = "ipv4_only"
+	OutboundIPv6Only = "ipv6_only"
 	ipv4ResolverTag  = "flvx-ipv4-resolver"
+	ipv6ResolverTag  = "flvx-ipv6-resolver"
 )
 
 // NormalizeOutboundIPStrategy keeps old configurations automatic and rejects
@@ -20,11 +22,11 @@ func NormalizeOutboundIPStrategy(kernelType, strategy string) (string, error) {
 	if strategy == "" {
 		strategy = OutboundIPAuto
 	}
-	if strategy != OutboundIPAuto && strategy != OutboundIPv4Only {
+	if strategy != OutboundIPAuto && strategy != OutboundIPv4Only && strategy != OutboundIPv6Only {
 		return "", fmt.Errorf("未知出站 IP 策略 %q", strategy)
 	}
 	if strategy != OutboundIPAuto && kernelType != TypeXray && kernelType != TypeSingbox {
-		return "", fmt.Errorf("仅 IPv4 出站需要 Xray 或 sing-box 内核")
+		return "", fmt.Errorf("出站 IP 策略需要 Xray 或 sing-box 内核")
 	}
 	return strategy, nil
 }
@@ -36,7 +38,7 @@ func ValidateOutboundIPExtra(kernelType, strategy string, extra json.RawMessage)
 	if err != nil {
 		return err
 	}
-	if policy != OutboundIPv4Only || len(extra) == 0 {
+	if policy == OutboundIPAuto || len(extra) == 0 {
 		return nil
 	}
 	var fields map[string]interface{}
@@ -45,7 +47,7 @@ func ValidateOutboundIPExtra(kernelType, strategy string, extra json.RawMessage)
 	}
 	for _, key := range []string{"tag", "detour"} {
 		if _, exists := fields[key]; exists {
-			return fmt.Errorf("仅 IPv4 出站时，高级配置不能覆盖 %s 字段", key)
+			return fmt.Errorf("限制出站 IP 时，高级配置不能覆盖 %s 字段", key)
 		}
 	}
 	return nil
@@ -61,14 +63,14 @@ func applyOutboundIPPolicies(kernelType string, cfg obj, inbounds []Inbound, pre
 		if err != nil {
 			return err
 		}
-		if strategy == OutboundIPv4Only {
+		if strategy != OutboundIPAuto {
+			in.OutboundIPStrategy = strategy
 			restricted = append(restricted, in)
 		}
 	}
 	if len(restricted) == 0 {
 		return nil
 	}
-	const v4Bind = "0.0.0.0"
 	routeKey, inboundKey, outboundKey, userKey := "route", "inbound", "outbound", "auth_user"
 	if kernelType == TypeXray {
 		routeKey, inboundKey, outboundKey, userKey = "routing", "inboundTag", "outboundTag", "user"
@@ -88,17 +90,36 @@ func applyOutboundIPPolicies(kernelType string, cfg obj, inbounds []Inbound, pre
 		}
 	}
 	var prefix, fallback []interface{}
+	var resolvers []interface{}
+	resolverAdded := map[string]bool{}
 	for _, in := range restricted {
+		family, blockedFamily := 4, 6
+		blockedCIDR, bindAddress, bindKey := "::/0", "0.0.0.0", "inet4_bind_address"
+		domainStrategy, resolverTag := "ForceIPv4", ipv4ResolverTag
+		if in.OutboundIPStrategy == OutboundIPv6Only {
+			family, blockedFamily = 6, 4
+			blockedCIDR, bindAddress, bindKey = "0.0.0.0/0", "::", "inet6_bind_address"
+			domainStrategy, resolverTag = "ForceIPv6", ipv6ResolverTag
+		}
+		tagPrefix := fmt.Sprintf("ipv%d-", family)
 		tags := singboxInboundTags(in)
 		if kernelType == TypeXray {
 			tags = []string{in.Tag()}
-			prefix = append(prefix, obj{"type": "field", inboundKey: tags, "ip": []string{"::/0"}, outboundKey: "block"})
+			prefix = append(prefix, obj{"type": "field", inboundKey: tags, "ip": []string{blockedCIDR}, outboundKey: "block"})
 		} else {
-			prefix = append(prefix, obj{inboundKey: tags, "ip_version": 6, "action": "reject"})
+			prefix = append(prefix, obj{inboundKey: tags, "ip_version": blockedFamily, "action": "reject"})
+			if !resolverAdded[resolverTag] {
+				resolver := obj{"type": "local", "tag": resolverTag}
+				if preferGoDNS {
+					resolver["prefer_go"] = true
+				}
+				resolvers = append(resolvers, resolver)
+				resolverAdded[resolverTag] = true
+			}
 		}
 		patch := func(ob obj) error {
-			if hasIPv6Server(ob) {
-				return fmt.Errorf("入站 %d 设置仅 IPv4 出站，无法连接 IPv6 地址的出站节点", in.ID)
+			if err := validateOutboundIPServers(in.OutboundIPStrategy, ob); err != nil {
+				return fmt.Errorf("入站 %d：%w", in.ID, err)
 			}
 			if kernelType == TypeXray {
 				stream, _ := ob["streamSettings"].(obj)
@@ -111,11 +132,11 @@ func applyOutboundIPPolicies(kernelType string, cfg obj, inbounds []Inbound, pre
 					sockopt = obj{}
 					stream["sockopt"] = sockopt
 				}
-				sockopt["domainStrategy"] = "ForceIPv4"
-				ob["sendThrough"] = v4Bind
+				sockopt["domainStrategy"] = domainStrategy
+				ob["sendThrough"] = bindAddress
 			} else if ob["detour"] == nil {
-				ob["domain_resolver"] = obj{"server": ipv4ResolverTag, "strategy": "ipv4_only"}
-				ob["inet4_bind_address"] = v4Bind
+				ob["domain_resolver"] = obj{"server": resolverTag, "strategy": in.OutboundIPStrategy}
+				ob[bindKey] = bindAddress
 			}
 			return nil
 		}
@@ -143,7 +164,7 @@ func applyOutboundIPPolicies(kernelType string, cfg obj, inbounds []Inbound, pre
 			data, _ := json.Marshal(original)
 			var copy obj
 			_ = json.Unmarshal(data, &copy)
-			tag := "ipv4-" + in.Tag() + "-" + sourceTag
+			tag := tagPrefix + in.Tag() + "-" + sourceTag
 			copy["tag"] = tag
 			_ = patch(copy) // A direct outbound contains no upstream server.
 			outbounds = append(outbounds, copy)
@@ -192,11 +213,7 @@ func applyOutboundIPPolicies(kernelType string, cfg obj, inbounds []Inbound, pre
 	route["rules"] = append(append(append(append(prefix, preprocess...), scoped...), fallback...), shared...)
 	if kernelType == TypeSingbox {
 		route["final"] = "direct"
-		resolver := obj{"type": "local", "tag": ipv4ResolverTag}
-		if preferGoDNS {
-			resolver["prefer_go"] = true
-		}
-		cfg["dns"] = obj{"servers": []interface{}{resolver}}
+		cfg["dns"] = obj{"servers": resolvers}
 	}
 	cfg["outbounds"] = outbounds
 	return nil
@@ -214,28 +231,44 @@ func containsInboundTag(value interface{}, tags []string) bool {
 	return false
 }
 
-// Only server address fields are checked, not IPv6 client/listen addresses.
-func hasIPv6Server(value interface{}) bool {
+// ValidateOutboundIPServer rejects literal next hops outside the selected IP
+// family. Domains are resolved by the kernel with the same strict policy.
+func ValidateOutboundIPServer(strategy, address string) error {
+	ip := net.ParseIP(strings.Trim(address, "[]"))
+	if ip == nil || strategy == "" || strategy == OutboundIPAuto {
+		return nil
+	}
+	if strategy == OutboundIPv4Only && ip.To4() == nil {
+		return fmt.Errorf("仅 IPv4 出站无法连接 IPv6 地址，请改用 IPv4 地址或域名")
+	}
+	if strategy == OutboundIPv6Only && ip.To4() != nil {
+		return fmt.Errorf("仅 IPv6 出站无法连接 IPv4 地址，请改用 IPv6 地址或域名")
+	}
+	return nil
+}
+
+// Only server address fields are checked, not client/listen addresses.
+func validateOutboundIPServers(strategy string, value interface{}) error {
 	switch v := value.(type) {
 	case map[string]interface{}:
 		for key, child := range v {
 			if key == "server" || key == "address" {
 				if address, ok := child.(string); ok {
-					if ip := net.ParseIP(strings.Trim(address, "[]")); ip != nil && ip.To4() == nil {
-						return true
+					if err := ValidateOutboundIPServer(strategy, address); err != nil {
+						return err
 					}
 				}
 			}
-			if hasIPv6Server(child) {
-				return true
+			if err := validateOutboundIPServers(strategy, child); err != nil {
+				return err
 			}
 		}
 	case []interface{}:
 		for _, child := range v {
-			if hasIPv6Server(child) {
-				return true
+			if err := validateOutboundIPServers(strategy, child); err != nil {
+				return err
 			}
 		}
 	}
-	return false
+	return nil
 }

@@ -58,25 +58,136 @@ func TestIPv4OnlyMixedInbounds(t *testing.T) {
 }
 
 func assertIPv4Dialer(t *testing.T, kt string, ob map[string]interface{}, counted bool) {
+	assertIPDialer(t, kt, ob, counted, OutboundIPv4Only)
+}
+
+func assertIPDialer(t *testing.T, kt string, ob map[string]interface{}, counted bool, policy string) {
 	t.Helper()
+	bind, sockStrategy, bindKey, resolverTag := "0.0.0.0", "ForceIPv4", "inet4_bind_address", ipv4ResolverTag
+	if policy == OutboundIPv6Only {
+		bind, sockStrategy, bindKey, resolverTag = "::", "ForceIPv6", "inet6_bind_address", ipv6ResolverTag
+	}
 	if ob == nil {
-		t.Fatal("missing IPv4 outbound")
+		t.Fatal("missing restricted outbound")
 	}
 	if kt == TypeXray {
 		sock := ob["streamSettings"].(map[string]interface{})["sockopt"].(map[string]interface{})
-		if ob["sendThrough"] != "0.0.0.0" || sock["domainStrategy"] != "ForceIPv4" {
-			t.Fatalf("Xray must fail closed when no A record exists: %v", ob)
+		if ob["sendThrough"] != bind || sock["domainStrategy"] != sockStrategy {
+			t.Fatalf("Xray must enforce %s without fallback: %v", policy, ob)
 		}
 		if counted && sock["mark"] != float64(UserMark(7)) {
 			t.Fatalf("lost accounting socket mark: %v", ob)
 		}
 	} else {
 		resolver := ob["domain_resolver"].(map[string]interface{})
-		if ob["inet4_bind_address"] != "0.0.0.0" || resolver["strategy"] != "ipv4_only" || resolver["server"] != ipv4ResolverTag {
-			t.Fatalf("sing-box must resolve/dial IPv4 only: %v", ob)
+		if ob[bindKey] != bind || resolver["strategy"] != policy || resolver["server"] != resolverTag {
+			t.Fatalf("sing-box must resolve/dial %s: %v", policy, ob)
 		}
 		if counted && ob["routing_mark"] != float64(UserMark(7)) {
 			t.Fatalf("lost accounting socket mark: %v", ob)
+		}
+	}
+}
+
+func TestIPv6OnlyAlongsideIPv4AndAutomatic(t *testing.T) {
+	for _, kt := range []string{TypeXray, TypeSingbox} {
+		t.Run(kt, func(t *testing.T) {
+			v6 := Inbound{ID: 1, Protocol: ProtocolVLESS, Listen: "0.0.0.0", Port: 8388,
+				Settings: Settings{UUID: "00000000-0000-4000-8000-000000000000"},
+				Users:    chainUser, OutboundIPStrategy: OutboundIPv6Only}
+			v4, auto := v6, v6
+			v4.ID, v4.Port, v4.OutboundIPStrategy = 2, 8389, OutboundIPv4Only
+			auto.ID, auto.Port, auto.OutboundIPStrategy = 3, 8390, OutboundIPAuto
+			cfg := renderJSON(t, kt, []Inbound{v6, v4, auto})
+			if cfg["inbounds"].([]interface{})[0].(map[string]interface{})["listen"] != "0.0.0.0" {
+				t.Fatal("IPv6 egress must preserve the IPv4 listener")
+			}
+			routeKey, obKey, inKey := "route", "outbound", "inbound"
+			if kt == TypeXray {
+				routeKey, obKey, inKey = "routing", "outboundTag", "inboundTag"
+			}
+			rules := cfg[routeKey].(map[string]interface{})["rules"].([]interface{})
+			want := []string{"reject", "reject", "ipv6-in-1-flvx-u7", "ipv6-in-1-direct", "ipv4-in-2-flvx-u7", "ipv4-in-2-direct", "flvx-u7"}
+			if kt == TypeXray {
+				want[0], want[1] = "block", "block"
+			}
+			if got := ruleOutbounds(rules, obKey); !reflect.DeepEqual(got, want) {
+				t.Fatalf("mixed policies must stay scoped ahead of user-wide routing: %v", got)
+			}
+			first := rules[0].(map[string]interface{})
+			if !reflect.DeepEqual(first[inKey], []interface{}{"in-1"}) {
+				t.Fatalf("IPv4 rejection leaked to another inbound: %v", first)
+			}
+			if kt == TypeXray {
+				if !reflect.DeepEqual(first["ip"], []interface{}{"0.0.0.0/0"}) {
+					t.Fatalf("IPv4 literal destinations must be blocked: %v", first)
+				}
+			} else if first["ip_version"] != float64(4) {
+				t.Fatalf("IPv4 literal destinations must be rejected: %v", first)
+			}
+			for _, suffix := range []string{"direct", "flvx-u7"} {
+				assertIPDialer(t, kt, outboundByTag(cfg, "ipv6-in-1-"+suffix), suffix == "flvx-u7", OutboundIPv6Only)
+				assertIPv4Dialer(t, kt, outboundByTag(cfg, "ipv4-in-2-"+suffix), suffix == "flvx-u7")
+			}
+			shared := outboundByTag(cfg, "flvx-u7")
+			for _, key := range []string{"domain_resolver", "sendThrough", "inet4_bind_address", "inet6_bind_address"} {
+				if shared[key] != nil {
+					t.Fatalf("automatic inbound's dialer was modified: %v", shared)
+				}
+			}
+			if kt == TypeSingbox {
+				servers := cfg["dns"].(map[string]interface{})["servers"].([]interface{})
+				if len(servers) != 2 || servers[0].(map[string]interface{})["tag"] != ipv6ResolverTag || servers[1].(map[string]interface{})["tag"] != ipv4ResolverTag {
+					t.Fatalf("both policies must have valid local DNS references: %v", servers)
+				}
+			}
+		})
+	}
+}
+
+func TestIPv6OnlySplitChainAndAdvancedConfiguration(t *testing.T) {
+	for _, kt := range []string{TypeXray, TypeSingbox} {
+		t.Run(kt, func(t *testing.T) {
+			in := splitInbound()
+			in.OutboundIPStrategy = OutboundIPv6Only
+			in.Split[0].Via.Host = "2001:db8::2"
+			in.Split[0].Via.Proxy["server"] = "2001:db8::2"
+			in.Via = &Endpoint{Host: "exit.example.com", Port: 443, Proxy: Proxy{"type": "trojan", "server": "exit.example.com", "port": 443, "password": "x"}}
+			cfg := renderJSON(t, kt, []Inbound{in})
+			for _, tag := range []string{"via-1", "via-1-u7", "via-1-s1", "via-1-s1-u7", "ipv6-in-1-flvx-u7", "ipv6-in-1-direct"} {
+				assertIPDialer(t, kt, outboundByTag(cfg, tag), strings.HasSuffix(tag, "u7"), OutboundIPv6Only)
+			}
+			for _, address := range []string{"192.0.2.1", "::ffff:192.0.2.1"} {
+				in.Via = &Endpoint{Host: address, Port: 8388, Proxy: Proxy{"type": "ss", "server": address, "port": 8388, "cipher": "aes-128-gcm", "password": "x"}}
+				if _, err := Render(kt, []Inbound{in}); err == nil {
+					t.Fatalf("IPv4 next hop %s must be refused", address)
+				}
+			}
+			in.Via = nil
+			for _, extra := range []string{`{"tag":"custom"}`, `{"detour":"in-2"}`} {
+				in.Extra = json.RawMessage(extra)
+				if err := Normalize(kt, &in); err == nil {
+					t.Fatalf("IPv6 policy accepted conflicting advanced routing: %s", extra)
+				}
+				if _, err := Render(kt, []Inbound{in}); err == nil {
+					t.Fatalf("render accepted conflicting advanced routing: %s", extra)
+				}
+			}
+		})
+	}
+	if _, err := NormalizeOutboundIPStrategy(TypeSnell, OutboundIPv6Only); err == nil {
+		t.Fatal("standalone Snell must reject IPv6 egress policy")
+	}
+}
+
+func TestOutboundIPServerFamily(t *testing.T) {
+	for _, policy := range []string{OutboundIPAuto, OutboundIPv4Only, OutboundIPv6Only} {
+		for _, address := range []string{"192.0.2.1", "::ffff:192.0.2.1", "2001:db8::1", "[2001:db8::1]", "exit.example.com"} {
+			v4 := address == "192.0.2.1" || address == "::ffff:192.0.2.1"
+			wantError := address != "exit.example.com" && ((policy == OutboundIPv4Only && !v4) || (policy == OutboundIPv6Only && v4))
+			if err := ValidateOutboundIPServer(policy, address); (err != nil) != wantError {
+				t.Fatalf("%s / %s: unexpected validation result: %v", policy, address, err)
+			}
 		}
 	}
 }
@@ -149,23 +260,25 @@ func TestIPv4OnlyExtraCannotBypassPolicy(t *testing.T) {
 	}
 }
 
-func TestIPv4OnlyLocalDNSVersionCompatibility(t *testing.T) {
-	for _, preferGo := range []bool{false, true} {
-		in := Inbound{ID: 1, Protocol: ProtocolVLESS, Listen: "::", Port: 8388, OutboundIPStrategy: OutboundIPv4Only}
-		if err := Normalize(TypeSingbox, &in); err != nil {
-			t.Fatal(err)
-		}
-		r, err := RenderWith(TypeSingbox, []Inbound{in}, RenderOptions{SingboxPreferGoDNS: preferGo})
-		if err != nil {
-			t.Fatal(err)
-		}
-		cfg := renderJSONString(t, r.Files[0].Content)
-		resolver := cfg["dns"].(map[string]interface{})["servers"].([]interface{})[0].(map[string]interface{})
-		if preferGo && resolver["prefer_go"] != true {
-			t.Fatalf("modern local resolver must bypass unavailable systemd DBus: %v", resolver)
-		}
-		if !preferGo && resolver["prefer_go"] != nil {
-			t.Fatalf("sing-box 1.12 must not receive the unsupported prefer_go field: %v", resolver)
+func TestRestrictedLocalDNSVersionCompatibility(t *testing.T) {
+	for _, policy := range []string{OutboundIPv4Only, OutboundIPv6Only} {
+		for _, preferGo := range []bool{false, true} {
+			in := Inbound{ID: 1, Protocol: ProtocolVLESS, Listen: "::", Port: 8388, OutboundIPStrategy: policy}
+			if err := Normalize(TypeSingbox, &in); err != nil {
+				t.Fatal(err)
+			}
+			r, err := RenderWith(TypeSingbox, []Inbound{in}, RenderOptions{SingboxPreferGoDNS: preferGo})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := renderJSONString(t, r.Files[0].Content)
+			resolver := cfg["dns"].(map[string]interface{})["servers"].([]interface{})[0].(map[string]interface{})
+			if preferGo && resolver["prefer_go"] != true {
+				t.Fatalf("modern local resolver must bypass unavailable systemd DBus: %v", resolver)
+			}
+			if !preferGo && resolver["prefer_go"] != nil {
+				t.Fatalf("sing-box 1.12 must not receive the unsupported prefer_go field: %v", resolver)
+			}
 		}
 	}
 }
