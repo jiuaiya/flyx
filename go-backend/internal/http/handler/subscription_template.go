@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
@@ -19,14 +20,15 @@ import (
 const templateRefreshInterval = 24 * time.Hour
 
 type subTemplateView struct {
-	ID          int64  `json:"id"`
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	Content     string `json:"content"`
-	SourceURL   string `json:"sourceUrl"`
-	LastFetch   int64  `json:"lastFetch"`
-	LastError   string `json:"lastError"`
-	UpdatedTime int64  `json:"updatedTime"`
+	Builder     *kernel.TemplateBuilder `json:"builder,omitempty"`
+	ID          int64                   `json:"id"`
+	Name        string                  `json:"name"`
+	Kind        string                  `json:"kind"`
+	Content     string                  `json:"content"`
+	SourceURL   string                  `json:"sourceUrl"`
+	LastFetch   int64                   `json:"lastFetch"`
+	LastError   string                  `json:"lastError"`
+	UpdatedTime int64                   `json:"updatedTime"`
 	// UsedBy counts the subscriptions using it.
 	UsedBy     int `json:"usedBy"`
 	Groups     int `json:"groups"`
@@ -37,6 +39,18 @@ type subTemplateView struct {
 func templateView(t *model.SubscriptionTemplate, usedBy int) subTemplateView {
 	v := subTemplateView{ID: t.ID, Name: t.Name, Kind: t.Kind, Content: t.Content, SourceURL: t.SourceURL,
 		LastFetch: t.LastFetch, LastError: t.LastError, UpdatedTime: t.UpdatedTime, UsedBy: usedBy}
+	if t.BuilderConfig != "" {
+		var b kernel.TemplateBuilder
+		if json.Unmarshal([]byte(t.BuilderConfig), &b) == nil {
+			if b.Groups == nil {
+				b.Groups = []kernel.TemplateBuilderGroup{}
+			}
+			if b.Rules == nil {
+				b.Rules = []kernel.TemplateBuilderRule{}
+			}
+			v.Builder = &b
+		}
+	}
 	if s, err := kernel.CheckTemplate(t.Kind, t.Content, nil); err == nil {
 		v.Groups, v.AutoGroups, v.Rules = len(s.Groups), s.AutoGroups(), s.Rules
 	}
@@ -159,12 +173,21 @@ func (h *Handler) subscriptionTemplateList(w http.ResponseWriter, r *http.Reques
 	response.WriteJSON(w, response.OK(out))
 }
 
+func (h *Handler) subscriptionTemplateCatalog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	response.WriteJSON(w, response.OK(kernel.TemplateRuleCategories()))
+}
+
 type subTemplateRequest struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	Kind      string `json:"kind"`
-	Content   string `json:"content"`
-	SourceURL string `json:"sourceUrl"`
+	Builder   *kernel.TemplateBuilder `json:"builder"`
+	ID        int64                   `json:"id"`
+	Name      string                  `json:"name"`
+	Kind      string                  `json:"kind"`
+	Content   string                  `json:"content"`
+	SourceURL string                  `json:"sourceUrl"`
 	// SubscriptionID previews the groups with that subscription's nodes
 	// (check only).
 	SubscriptionID int64 `json:"subscriptionId"`
@@ -174,6 +197,18 @@ type subTemplateRequest struct {
 // template.
 func (req *subTemplateRequest) content(ctx context.Context) (string, error) {
 	req.SourceURL = strings.TrimSpace(req.SourceURL)
+	if req.Builder != nil {
+		if req.Builder.Groups == nil {
+			req.Builder.Groups = []kernel.TemplateBuilderGroup{}
+		}
+		if req.Builder.Rules == nil {
+			req.Builder.Rules = []kernel.TemplateBuilderRule{}
+		}
+		if req.SourceURL != "" {
+			return "", errText("选择规则与网址模板不能同时使用")
+		}
+		return kernel.BuildSubscriptionTemplate(req.Kind, *req.Builder)
+	}
 	if req.SourceURL == "" {
 		return strings.ReplaceAll(req.Content, "\r\n", "\n"), nil
 	}
@@ -269,6 +304,11 @@ func (h *Handler) subscriptionTemplateSave(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	t.Name, t.Kind, t.Content, t.SourceURL, t.UpdatedTime = req.Name, req.Kind, content, req.SourceURL, now
+	t.BuilderConfig = ""
+	if req.Builder != nil {
+		raw, _ := json.Marshal(req.Builder)
+		t.BuilderConfig = string(raw)
+	}
 	t.LastError = ""
 	if t.SourceURL != "" {
 		t.LastFetch = now

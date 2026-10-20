@@ -721,9 +721,36 @@ export interface SubPipeline {
   /** Subscription template id per client kind; a kind without one gets the built-in profile. */
   templates?: Partial<Record<SubTemplateKind, number>>;
 }
+export interface SubTemplateBuilder {
+  version: 1;
+  preset: "minimal" | "balanced" | "full" | "custom";
+  groups: Array<{ name: string; type: "select" | "url-test"; filter: string }>;
+  rules: Array<{
+    type:
+      | "category"
+      | "domain"
+      | "domain_suffix"
+      | "domain_keyword"
+      | "ip_cidr";
+    value: string;
+    target: string;
+  }>;
+  final: string;
+}
+export interface SubTemplateCategory {
+  key: string;
+  name: string;
+  icon: string;
+  target: string;
+  presets: string[];
+}
+export const getSubTemplateCatalog = () =>
+  Network.post<SubTemplateCategory[]>("/subscription/template/catalog");
+
 export type SubTemplateKind = "clash" | "singbox" | "surge";
 /** A user's own Mihomo / sing-box / Surge profile that subscriptions render into. */
 export interface SubTemplate {
+  builder?: SubTemplateBuilder;
   id: number;
   name: string;
   kind: SubTemplateKind;
@@ -755,6 +782,7 @@ export interface SubTemplateSummary {
   warnings: string[];
 }
 export interface SubTemplateDraft {
+  builder?: SubTemplateBuilder;
   id?: number;
   name: string;
   kind: SubTemplateKind;

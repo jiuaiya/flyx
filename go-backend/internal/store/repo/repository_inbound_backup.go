@@ -78,7 +78,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 	}
 	for _, t := range templates {
 		out.Templates = append(out.Templates, model.TemplateBackup{
-			ID: t.ID, Name: t.Name, Kind: t.Kind, Content: t.Content, SourceURL: t.SourceURL, CreatedTime: t.CreatedTime,
+			ID: t.ID, Name: t.Name, Kind: t.Kind, Content: t.Content, SourceURL: t.SourceURL, BuilderConfig: t.BuilderConfig, CreatedTime: t.CreatedTime,
 		})
 	}
 	var subs []model.Subscription
@@ -144,12 +144,12 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 	// Templates keep their ids: subscription options refer to them.
 	for _, t := range b.Templates {
 		item := model.SubscriptionTemplate{
-			ID: t.ID, Name: t.Name, Kind: t.Kind, Content: t.Content, SourceURL: t.SourceURL,
+			ID: t.ID, Name: t.Name, Kind: t.Kind, Content: t.Content, SourceURL: t.SourceURL, BuilderConfig: t.BuilderConfig,
 			CreatedTime: t.CreatedTime, UpdatedTime: now,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"name", "kind", "content", "source_url", "updated_time"}),
+			DoUpdates: clause.AssignmentColumns([]string{"name", "kind", "content", "source_url", "builder_config", "updated_time"}),
 		}).Create(&item).Error; err != nil {
 			return 0, err
 		}
