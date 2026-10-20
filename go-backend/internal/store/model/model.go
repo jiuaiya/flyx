@@ -512,12 +512,13 @@ type InboundBackup struct {
 }
 
 type TemplateBackup struct {
-	ID          int64  `json:"id"`
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	Content     string `json:"content"`
-	SourceURL   string `json:"sourceUrl,omitempty"`
-	CreatedTime int64  `json:"createdTime"`
+	BuilderConfig string `json:"builderConfig,omitempty"`
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	Kind          string `json:"kind"`
+	Content       string `json:"content"`
+	SourceURL     string `json:"sourceUrl,omitempty"`
+	CreatedTime   int64  `json:"createdTime"`
 }
 
 type RemoteSourceBackup struct {

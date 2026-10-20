@@ -816,7 +816,8 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		view := map[string]interface{}{"id": t.ID, "name": t.Name}
-		if summary, err := kernel.CheckTemplate(t.Kind, t.Content, names); err != nil {
+		content, _ := effectiveTemplate(t)
+		if summary, err := kernel.CheckTemplate(t.Kind, content, names); err != nil {
 			view["error"] = err.Error()
 		} else {
 			view["groups"], view["warnings"] = summary.Groups, summary.Warnings
