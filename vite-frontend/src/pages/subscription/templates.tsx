@@ -1,5 +1,7 @@
 import type {
   SubscriptionItem,
+  SubTemplateBuilder,
+  SubTemplateCategory,
   SubTemplate,
   SubTemplateDraft,
   SubTemplateGroup,
@@ -20,6 +22,7 @@ import {
 import { ListRow } from "@/components/page-kit";
 import {
   TemplateBuilder,
+  TemplateRulePreview,
   newTemplateBuilder,
 } from "@/pages/subscription/template-builder";
 import { Segmented } from "@/pages/subscription/controls";
@@ -240,6 +243,7 @@ export function TemplateGroups({
 }
 
 type Check = {
+  builder?: SubTemplateBuilder;
   summary: SubTemplateSummary;
   autoGroups: number;
   sample: string;
@@ -271,6 +275,8 @@ function Editor({
   onDeleted: (id: number) => void;
 }) {
   const [draft, setDraft] = useState(initial);
+  const [catalog, setCatalog] = useState<SubTemplateCategory[]>([]);
+  const checkSequence = useRef(0);
   const [mode, setMode] = useState<"builder" | "paste" | "url">(
     initial.builder ? "builder" : initial.sourceUrl ? "url" : "paste",
   );
@@ -284,11 +290,15 @@ function Editor({
   // The cursor in the content box, once the user has put it there.
   const cursor = useRef<number | null>(null);
   const set = (patch: Partial<SubTemplateDraft>) => {
+    checkSequence.current++;
+    setChecking(false);
     setDraft((d) => ({ ...d, ...patch }));
     setCheck(null);
   };
 
   const runCheck = async () => {
+    const sequence = ++checkSequence.current;
+
     setChecking(true);
     try {
       const res = await checkSubTemplate({
@@ -299,19 +309,20 @@ function Editor({
         subscriptionId: sampleId || undefined,
       });
 
+      if (sequence !== checkSequence.current) return;
       if (res.code !== 0 || !res.data) {
         toast.error(res.msg || "检查失败");
         setCheck(null);
 
         return;
       }
-      setCheck(res.data);
+      setCheck({ ...res.data, builder: building ? draft.builder : undefined });
       if (fromUrl || building)
         setDraft((d) => ({ ...d, content: res.data!.content }));
     } catch {
-      toast.error("检查失败");
+      if (sequence === checkSequence.current) toast.error("检查失败");
     } finally {
-      setChecking(false);
+      if (sequence === checkSequence.current) setChecking(false);
     }
   };
 
@@ -339,6 +350,7 @@ function Editor({
   };
 
   const changeMode = async (next: "builder" | "paste" | "url") => {
+    checkSequence.current++;
     if (building && next !== "builder") {
       setChecking(true);
       try {
@@ -492,6 +504,7 @@ function Editor({
             )}
             <TemplateBuilder
               value={draft.builder}
+              onCatalog={setCatalog}
               onChange={(builder) => set({ builder })}
             />
           </div>
@@ -609,7 +622,7 @@ function Editor({
               value={sampleId}
               onChange={(e) => {
                 setSampleId(Number(e.target.value));
-                setCheck(null);
+                set({});
               }}
             >
               <option value={0}>全部节点</option>
@@ -638,14 +651,31 @@ function Editor({
           </div>
           {check ? (
             <>
-              <p className="text-xs">
-                识别到 <b>{check.summary.groups.length}</b> 个策略组，其中{" "}
-                <b>{check.autoGroups}</b> 个自动收节点；规则{" "}
-                {check.summary.rules} 条
-                {check.summary.providers > 0 &&
-                  `，规则集 ${check.summary.providers} 个`}
-                。按「{check.sample}」的 {check.nodes} 个节点预演：
-              </p>
+              {check.builder ? (
+                <>
+                  <p className="text-xs">
+                    以下规则按顺序匹配，未命中时走兜底。共生成{" "}
+                    {check.summary.rules} 条客户端规则
+                    {check.summary.providers > 0
+                      ? `、${check.summary.providers} 个规则集`
+                      : ""}
+                    。
+                  </p>
+                  <TemplateRulePreview
+                    catalog={catalog}
+                    value={check.builder}
+                  />
+                </>
+              ) : (
+                <p className="text-xs">
+                  识别到 <b>{check.summary.groups.length}</b> 个策略组，其中{" "}
+                  <b>{check.autoGroups}</b> 个自动收节点；规则{" "}
+                  {check.summary.rules} 条
+                  {check.summary.providers > 0 &&
+                    `，规则集 ${check.summary.providers} 个`}
+                  。按「{check.sample}」的 {check.nodes} 个节点预演：
+                </p>
+              )}
               {building && (
                 <details className="rounded-lg border border-divider p-2">
                   <summary className="cursor-pointer text-xs">
@@ -661,10 +691,25 @@ function Editor({
                   />
                 </details>
               )}
-              <TemplateGroups
-                groups={check.summary.groups}
-                warnings={check.summary.warnings}
-              />
+              {check.builder ? (
+                <details className="space-y-2 rounded-lg border border-divider p-2">
+                  <summary className="cursor-pointer text-xs">
+                    代理节点详情 · {check.sample}（{check.nodes} 个节点）
+                  </summary>
+                  <p className="text-xs text-default-500">
+                    规则选择“代理”时，由节点选择或自动测速决定使用哪个节点。这里不改变规则的匹配顺序。
+                  </p>
+                  <TemplateGroups
+                    groups={check.summary.groups}
+                    warnings={check.summary.warnings}
+                  />
+                </details>
+              ) : (
+                <TemplateGroups
+                  groups={check.summary.groups}
+                  warnings={check.summary.warnings}
+                />
+              )}
               {autoGroups.some((g) => g.filterError) && (
                 <p className="text-xs text-default-400">
                   标“由客户端按过滤条件收节点”的组用了面板预览不了的正则写法，客户端照常生效
@@ -673,7 +718,9 @@ function Editor({
             </>
           ) : (
             <p className="text-xs text-default-400">
-              检查格式，并看看每个策略组能收到哪些节点
+              {building
+                ? "生成配置并查看规则的分流去向，可展开代理节点详情。"
+                : "检查格式，并看看每个策略组能收到哪些节点"}
             </p>
           )}
         </div>

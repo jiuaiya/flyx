@@ -16,8 +16,7 @@ const PRESETS = [
   ["full", "完整规则"],
   ["custom", "自定义"],
 ] as const;
-const GROUPS: SubTemplateBuilder["groups"] = [
-  { name: "自动选择", type: "url-test", filter: "" },
+const REGION_GROUPS: SubTemplateBuilder["groups"] = [
   { name: "🇭🇰 香港", type: "url-test", filter: "(?i)港|HK|Hong Kong" },
   { name: "🇯🇵 日本", type: "url-test", filter: "(?i)日本|JP|Japan|东京|大阪" },
   {
@@ -36,7 +35,7 @@ const RULE_TYPES = [
 export const newTemplateBuilder = (): SubTemplateBuilder => ({
   version: 1,
   preset: "balanced",
-  groups: GROUPS.map((g) => ({ ...g })),
+  groups: [{ name: "自动选择", type: "url-test", filter: "" }],
   rules: [],
   final: MAIN,
 });
@@ -44,9 +43,11 @@ export const newTemplateBuilder = (): SubTemplateBuilder => ({
 export function TemplateBuilder({
   value,
   onChange,
+  onCatalog,
 }: {
   value: SubTemplateBuilder;
   onChange: (value: SubTemplateBuilder) => void;
+  onCatalog?: (catalog: SubTemplateCategory[]) => void;
 }) {
   const [catalog, setCatalog] = useState<SubTemplateCategory[]>([]);
   const [loadError, setLoadError] = useState(false);
@@ -65,6 +66,7 @@ export function TemplateBuilder({
         if (!active) return;
         if (res.code === 0 && res.data) {
           setCatalog(res.data);
+          onCatalog?.(res.data);
           setLoadError(false);
         } else setLoadError(true);
       })
@@ -75,7 +77,7 @@ export function TemplateBuilder({
     return () => {
       active = false;
     };
-  }, [retry]);
+  }, [retry, onCatalog]);
 
   useEffect(() => {
     if (catalog.length && value.preset !== "custom" && !value.rules.length) {
@@ -408,6 +410,24 @@ export function TemplateBuilder({
         <p className="my-3 text-xs text-default-500">
           节点选择包含所有分组和节点。下面的分组按节点名称过滤；过滤留空即包含所有节点。
         </p>
+        <div className="mb-3 flex flex-wrap gap-2">
+          {REGION_GROUPS.map((g) => (
+            <Button
+              key={g.name}
+              isDisabled={
+                value.groups.length >= 20 ||
+                value.groups.some((x) => x.name === g.name)
+              }
+              size="sm"
+              variant="flat"
+              onPress={() =>
+                onChange({ ...value, groups: [...value.groups, { ...g }] })
+              }
+            >
+              添加{g.name}
+            </Button>
+          ))}
+        </div>
         <div className="space-y-3">
           {value.groups.map((g, i) => (
             <div key={i} className="space-y-2 rounded-lg bg-default-50 p-2">
@@ -496,6 +516,77 @@ export function TemplateBuilder({
       <p className="text-xs text-default-500">
         规则集由客户端按天更新，面板无需增加后台服务。生成后可在下方预览配置。
       </p>
+    </div>
+  );
+}
+
+/** Ordered routing is the primary preview; groups only choose proxy nodes. */
+export function TemplateRulePreview({
+  value,
+  catalog,
+}: {
+  value: SubTemplateBuilder;
+  catalog: SubTemplateCategory[];
+}) {
+  const target = (to: string) => (
+    <span
+      className={`shrink-0 rounded-full px-2 py-1 text-xs ${to === "DIRECT" ? "bg-success/10 text-success" : to === "REJECT" ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary"}`}
+    >
+      {to === "DIRECT" ? "直连" : to === "REJECT" ? "拦截" : `代理 · ${to}`}
+    </span>
+  );
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-divider">
+      <div className="flex justify-between gap-2 bg-default-100/60 px-3 py-2 text-xs font-medium">
+        <span>分流规则（从上往下匹配）</span>
+        <span>去向</span>
+      </div>
+      {value.rules.map((r, i) => {
+        const category =
+          r.type === "category"
+            ? catalog.find((c) => c.key === r.value)
+            : undefined;
+
+        return (
+          <div
+            key={`${i}-${r.type}`}
+            className="flex items-center gap-2 border-t border-divider px-3 py-2"
+          >
+            <span className="w-5 shrink-0 text-xs text-default-400">
+              {i + 1}
+            </span>
+            <div className="min-w-0 flex-1 text-xs">
+              {category ? (
+                <span>
+                  {category.icon} {category.name}
+                </span>
+              ) : (
+                <>
+                  <span className="text-default-500">
+                    {RULE_TYPES.find(([k]) => k === r.type)?.[1] ?? r.type}{" "}
+                    ·{" "}
+                  </span>
+                  <span className="break-all">{r.value}</span>
+                </>
+              )}
+            </div>
+            <span aria-hidden className="text-default-400">
+              →
+            </span>
+            {target(r.target)}
+          </div>
+        );
+      })}
+      <div className="flex items-center gap-2 border-t border-divider bg-default-100/40 px-3 py-2">
+        <span className="min-w-0 flex-1 text-xs">
+          <b>兜底</b> · 未命中以上规则的流量
+        </span>
+        <span aria-hidden className="text-default-400">
+          →
+        </span>
+        {target(value.final)}
+      </div>
     </div>
   );
 }
