@@ -27,6 +27,13 @@ func TestShareAddressFamilyAndSubscriptions(t *testing.T) {
 	box := seedChainKernel(t, r, id, kernel.TypeSingbox)
 	row := seedChainInbound(t, r, box, "IPv6 入 IPv4 出", kernel.Inbound{Protocol: kernel.ProtocolVLESS, Listen: "::", Port: 443, OutboundIPStrategy: kernel.OutboundIPv4Only}, 0)
 	row.ShareAddressMode = "ipv6"
+	if err := r.SaveNodeInbound(row); err != nil {
+		t.Fatal(err)
+	}
+	row, err = r.GetNodeInbound(row.ID)
+	if err != nil || row.ShareAddressMode != "ipv6" {
+		t.Fatalf("address mode did not persist: %v", err)
+	}
 	endpoints, _ := h.inboundEndpoints([]model.NodeInbound{*row})
 	if len(endpoints) != 1 || endpoints[0].Host != "2001:db8::1234" || endpoints[0].Inbound.OutboundIPStrategy != kernel.OutboundIPv4Only {
 		t.Fatalf("endpoint: %+v", endpoints)
