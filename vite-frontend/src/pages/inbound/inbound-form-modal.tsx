@@ -136,7 +136,14 @@ export function InboundFormModal({
     const first = presetsFor(caps, kernelType)[0];
 
     setForm((prev) => {
-      const next = { ...prev, kernelType };
+      const next: InboundForm = {
+        ...prev,
+        kernelType,
+        outboundIpStrategy:
+          kernelType === "xray" || kernelType === "singbox"
+            ? prev.outboundIpStrategy
+            : "auto",
+      };
 
       if (info?.protocols?.some((p) => p.protocol === prev.protocol)) {
         return next;
