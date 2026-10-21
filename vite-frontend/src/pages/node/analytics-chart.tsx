@@ -102,7 +102,16 @@ export async function saveChartImage(container: HTMLElement, filename: string) {
         x = 20;
         y += 20;
       }
-      const label = { text, color: getComputedStyle(element).color, x, y };
+      const marker = element
+        .closest(".recharts-legend-item")
+        ?.querySelector(".recharts-legend-icon");
+      const markerStyle = marker ? getComputedStyle(marker) : null;
+      const color = markerStyle
+        ? markerStyle.stroke !== "none"
+          ? markerStyle.stroke
+          : markerStyle.fill
+        : getComputedStyle(element).color;
+      const label = { text, color, x, y };
 
       x += width;
 

@@ -5,12 +5,13 @@ import {
   Activity,
   ArrowDownUp,
   CheckCircle2,
+  ChartLine,
   Clock3,
   Download,
   Link2,
-  Maximize,
   RefreshCw,
   RotateCcw,
+  Search,
   Signal,
   TriangleAlert,
 } from "lucide-react";
@@ -29,6 +30,8 @@ import {
 import toast from "react-hot-toast";
 
 import { getNodeQuality } from "@/api";
+import { cn } from "@/lib/utils";
+import { latencyChartScale } from "@/pages/node/latency-chart-scale";
 import {
   analyticsButton,
   analyticsDate,
@@ -39,12 +42,16 @@ import {
 const colors = [
   "#a78bfa",
   "#f87171",
-  "#34d399",
+  "#84cc16",
   "#60a5fa",
   "#fbbf24",
   "#22d3ee",
   "#fb923c",
   "#e879f9",
+  "#34d399",
+  "#818cf8",
+  "#f472b6",
+  "#a3a3a3",
 ];
 const ranges = [
   [1, "1h"],
@@ -204,8 +211,10 @@ export function NodeNetworkQuality({
     return () => window.clearInterval(timer);
   }, []);
 
-  const shown = (data?.points ?? []).filter(
-    (p) => !targets.length || targets.includes(p.name),
+  const shown = (data?.points ?? []).flatMap((point, index) =>
+    !targets.length || targets.includes(point.name)
+      ? [{ point, index, color: colors[index % colors.length] }]
+      : [],
   );
   const targetList = worst
     ? (data?.points ?? [])
@@ -242,6 +251,9 @@ export function NodeNetworkQuality({
         (row) => Number(row.t) >= zoom[0] && Number(row.t) <= zoom[1],
       )
     : chartRows;
+  const yAxis = latencyChartScale(
+    plotted.flatMap((row) => shown.map(({ index }) => row[`s${index}`])),
+  );
   const summary = data?.summary;
   const rangeLabel = ranges.find(([h]) => h === hours)?.[1];
   const refresh = () => setRevision((v) => v + 1);
@@ -468,16 +480,25 @@ export function NodeNetworkQuality({
               ref={graph}
               className="min-w-0 overflow-hidden rounded-2xl border border-divider bg-content1"
             >
-              <div className="flex flex-wrap items-center gap-3 border-b border-divider px-4 py-3.5">
-                <h3 className="mr-auto text-sm font-semibold">
-                  趋势{" "}
-                  <span className="ml-2 text-xs font-normal text-default-500">
+              <div className="flex flex-wrap items-center gap-2 border-b border-divider px-4 py-3">
+                <h3 className="mr-auto flex min-w-0 items-center gap-2 text-sm font-semibold">
+                  <ChartLine
+                    aria-hidden="true"
+                    className="h-4 w-4 shrink-0 text-default-500"
+                  />
+                  趋势
+                  <span
+                    className="ml-1 text-xs font-normal text-default-500"
+                    title={selected.join("、")}
+                  >
                     当前：
-                    {selected.length
-                      ? selected.join("、")
-                      : worst
-                        ? "最差 10 个目标"
-                        : "全部目标"}
+                    {selected.length > 1
+                      ? `${selected.length} 个目标`
+                      : selected.length
+                        ? selected[0]
+                        : worst
+                          ? "最差 10 个目标"
+                          : "全部目标"}
                   </span>
                 </h3>
                 <label className="flex items-center gap-2 text-xs text-default-500">
@@ -496,16 +517,16 @@ export function NodeNetworkQuality({
                     <option value={5}>5 分钟</option>
                   </select>
                 </label>
-                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-default-500">
-                  <input
-                    checked={connect}
-                    className="accent-primary"
-                    type="checkbox"
-                    onChange={(e) => setConnect(e.target.checked)}
-                  />
-                  <Link2 className="h-3.5 w-3.5" />
-                  连接缺失点
-                </label>
+                <button
+                  aria-label="连接缺失点"
+                  aria-pressed={connect}
+                  className={cn(analyticsButton(connect), "w-8 px-0")}
+                  title="连接缺失点"
+                  type="button"
+                  onClick={() => setConnect((value) => !value)}
+                >
+                  <Link2 aria-hidden="true" className="h-4 w-4" />
+                </button>
                 <div
                   aria-label="网络质量时间范围"
                   className="flex items-center gap-1"
@@ -576,26 +597,29 @@ export function NodeNetworkQuality({
                   </button>
                 )}
                 <button
+                  aria-label="区域缩放"
                   aria-pressed={zoomMode}
-                  className={analyticsButton(zoomMode)}
+                  className={cn(analyticsButton(zoomMode), "w-8 px-0")}
                   title="开启后在图表上拖动选择时间区间"
                   type="button"
                   onClick={() => setZoomMode((v) => !v)}
                 >
-                  <Maximize className="h-3 w-3" />
-                  区域缩放
+                  <Search aria-hidden="true" className="h-4 w-4" />
                 </button>
                 <button
-                  className={analyticsButton()}
+                  aria-label="缩放还原"
+                  className={cn(analyticsButton(), "w-8 px-0")}
                   disabled={!zoom}
+                  title="缩放还原"
                   type="button"
                   onClick={resetZoom}
                 >
-                  <RotateCcw className="h-3 w-3" />
-                  缩放还原
+                  <RotateCcw aria-hidden="true" className="h-4 w-4" />
                 </button>
                 <button
-                  className={analyticsButton()}
+                  aria-label="保存为图片"
+                  className={cn(analyticsButton(), "w-8 px-0")}
+                  title="保存为图片"
                   type="button"
                   onClick={() => {
                     if (chart.current)
@@ -611,8 +635,7 @@ export function NodeNetworkQuality({
                         );
                   }}
                 >
-                  <Download className="h-3 w-3" />
-                  保存为图片
+                  <Download aria-hidden="true" className="h-4 w-4" />
                 </button>
               </div>
               <div
@@ -630,7 +653,7 @@ export function NodeNetworkQuality({
                   <LineChart
                     accessibilityLayer
                     data={plotted}
-                    margin={{ top: 12, right: 20, bottom: 15, left: 0 }}
+                    margin={{ top: 16, right: 16, bottom: 12, left: 4 }}
                     onMouseDown={(e: { activeLabel?: number | string }) => {
                       const t = Number(e?.activeLabel);
 
@@ -654,7 +677,7 @@ export function NodeNetworkQuality({
                     />
                     <XAxis
                       allowDataOverflow
-                      axisLine={false}
+                      axisLine={{ stroke: "var(--divider)" }}
                       dataKey="t"
                       domain={zoom ?? [data.since, data.until]}
                       minTickGap={30}
@@ -667,47 +690,44 @@ export function NodeNetworkQuality({
                       type="number"
                     />
                     <YAxis
+                      allowDataOverflow
                       axisLine={false}
-                      domain={[0, "auto"]}
-                      label={{
-                        value: "ms",
-                        position: "insideTopLeft",
-                        dy: -16,
-                        fill: "var(--default-500)",
-                        fontSize: 11,
-                        offset: 3,
-                      }}
+                      domain={[0, yAxis.max]}
+                      interval={0}
                       stroke="var(--default-500)"
                       tick={{ fontSize: 11 }}
+                      tickFormatter={(value: number) => `${value} ms`}
                       tickLine={false}
-                      width={48}
+                      ticks={yAxis.ticks}
+                      width={64}
                     />
                     <Tooltip content={<QualityTooltip />} filterNull={false} />
                     <Legend
-                      iconType="circle"
+                      formatter={(value: string) => (
+                        <span className="text-foreground">{value}</span>
+                      )}
+                      iconSize={20}
+                      iconType="line"
+                      itemSorter={null}
                       verticalAlign="top"
                       wrapperStyle={{ paddingBottom: 28, fontSize: 12 }}
                     />
-                    {shown.map((point) => {
-                      const i = data.points.findIndex(
-                        (p) => p.name === point.name,
-                      );
-
-                      return (
-                        <Line
-                          key={point.name}
-                          activeDot={{ r: 4 }}
-                          connectNulls={connect}
-                          dataKey={`s${i}`}
-                          dot={false}
-                          isAnimationActive={false}
-                          name={point.name}
-                          stroke={colors[i % colors.length]}
-                          strokeWidth={1.6}
-                          type="linear"
-                        />
-                      );
-                    })}
+                    {shown.map(({ point, index, color }) => (
+                      <Line
+                        key={point.name}
+                        activeDot={{ r: 4 }}
+                        connectNulls={connect}
+                        dataKey={`s${index}`}
+                        dot={false}
+                        isAnimationActive={false}
+                        name={point.name}
+                        stroke={color}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={1.8}
+                        type="monotoneX"
+                      />
+                    ))}
                     {selection && (
                       <ReferenceArea
                         fill="var(--primary)"
