@@ -21,7 +21,7 @@ func TestReconnectProbeTargetsIncludeEveryTunnelRoleAndLanding(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, node := range []int64{entry, hop, exit, landing} {
-		relays, nodes, err := h.reconnectProbeTargets([]int64{node, node})
+		relays, nodes, _, err := h.reconnectProbeTargets([]int64{node, node})
 		wantNodes := []int64{entry}
 		if node != entry {
 			wantNodes = append(wantNodes, node)
@@ -143,6 +143,7 @@ func TestReconnectNodeWithoutRelayOnlyRefreshesItsOwnLatency(t *testing.T) {
 	id := mustCreateRelayNode(t, r, "no-relay", "198.51.100.1")
 	other := mustCreateRelayNode(t, r, "other", "198.51.100.2")
 	relay := mustCreateRelayLine(t, r, "unrelated", 1, "203.0.113.1:443", other, nil, 0)
+	h.reachProbes.replace(map[int64]reachProbe{999: {CheckedAt: 123}}, false)
 	calls := stubLatencyPing(t, func(node int64, host string) (map[string]interface{}, error) {
 		if node != id || host != "a.example.com" {
 			t.Errorf("unrelated measurement: node=%d host=%s", node, host)
@@ -157,6 +158,9 @@ func TestReconnectNodeWithoutRelayOnlyRefreshesItsOwnLatency(t *testing.T) {
 	}
 	if _, ok := h.relayLatency.get(relay); ok {
 		t.Fatal("empty affected-relay list triggered a full relay round")
+	}
+	if p, ok := h.reachProbes.get(999); !ok || p.CheckedAt != 123 {
+		t.Fatal("empty affected-inbound list triggered a full port check")
 	}
 }
 

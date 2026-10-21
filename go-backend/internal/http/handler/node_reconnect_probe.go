@@ -88,7 +88,7 @@ func (h *Handler) runNodeReconnectProbes(ctx context.Context, queue *nodeReconne
 
 // Include all tunnel roles and the built landing, not just the entry. Refresh
 // the entries' reference points first so relays cannot reuse an offline sample.
-func (h *Handler) reconnectProbeTargets(nodes []int64) (relayIDs, nodeIDs []int64, err error) {
+func (h *Handler) reconnectProbeTargets(nodes []int64) (relayIDs, nodeIDs, inboundIDs []int64, err error) {
 	want := make(map[int64]struct{}, len(nodes))
 	for _, id := range nodes {
 		want[id] = struct{}{}
@@ -99,15 +99,18 @@ func (h *Handler) reconnectProbeTargets(nodes []int64) (relayIDs, nodeIDs []int6
 	}
 	rows, err := h.repo.ListInboundRelays(0)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	inbounds, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	landings := make(map[int64]int64, len(inbounds))
 	for _, in := range inbounds {
 		landings[in.ID] = in.NodeID
+		if _, reconnected := want[in.NodeID]; reconnected && in.Enabled == 1 && !isExternalInbound(&in) {
+			inboundIDs = append(inboundIDs, in.ID)
+		}
 	}
 	chains := make(map[int64][]chainNodeRecord)
 	for _, row := range rows {
@@ -118,7 +121,7 @@ func (h *Handler) reconnectProbeTargets(nodes []int64) (relayIDs, nodeIDs []int6
 		if !loaded {
 			chain, err = h.listChainNodesForTunnel(row.TunnelID)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			chains[row.TunnelID] = chain
 		}
@@ -136,19 +139,24 @@ func (h *Handler) reconnectProbeTargets(nodes []int64) (relayIDs, nodeIDs []int6
 			measure[entries[0].NodeID] = struct{}{}
 		}
 	}
-	return relayIDs, sortedProbeIDs(measure), nil
+	return relayIDs, sortedProbeIDs(measure), inboundIDs, nil
 }
 
 func (h *Handler) probeReconnectedNodes(ctx context.Context, nodes []int64) error {
 	if len(nodes) == 0 {
 		return nil // Empty IDs mean "all" to the probe functions.
 	}
-	relayIDs, nodeIDs, err := h.reconnectProbeTargets(nodes)
+	relayIDs, nodeIDs, inboundIDs, err := h.reconnectProbeTargets(nodes)
 	if err != nil {
 		return err
 	}
 	if _, err := h.probeNodeLatency(ctx, nodeIDs); err != nil {
 		return err
+	}
+	if len(inboundIDs) > 0 {
+		if _, err := h.probeInboundReach(ctx, inboundIDs); err != nil {
+			return err
+		}
 	}
 	if len(relayIDs) > 0 {
 		if _, err := h.probeRelayLatency(ctx, relayIDs); err != nil {
@@ -156,7 +164,7 @@ func (h *Handler) probeReconnectedNodes(ctx context.Context, nodes []int64) erro
 		}
 	}
 	if ctx.Err() == nil {
-		log.Printf("node reconnect probe complete nodes=%v measured_nodes=%v relays=%v", nodes, nodeIDs, relayIDs)
+		log.Printf("node reconnect probe complete nodes=%v measured_nodes=%v relays=%v inbounds=%v", nodes, nodeIDs, relayIDs, inboundIDs)
 	}
 	return ctx.Err()
 }

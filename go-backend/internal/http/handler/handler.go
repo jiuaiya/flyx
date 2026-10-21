@@ -52,6 +52,7 @@ type Handler struct {
 	reconnectProbes     *nodeReconnectProbeQueue
 	nodeLatencyProbeMu  sync.Mutex
 	relayLatencyProbeMu sync.Mutex
+	inboundReachProbeMu sync.Mutex
 
 	upgradeMu                   sync.Mutex
 	systemUpgradeMu             sync.Mutex
