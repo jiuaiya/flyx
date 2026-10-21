@@ -724,7 +724,7 @@ export function NodeNetworkQuality({
                         stroke={color}
                         strokeLinecap="round"
                         strokeLinejoin="round"
-                        strokeWidth={1.8}
+                        strokeWidth={1.5}
                         type="monotoneX"
                       />
                     ))}
