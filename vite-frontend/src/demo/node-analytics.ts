@@ -6,6 +6,8 @@ import type {
   NodeTrafficGrain,
 } from "@/api/types";
 
+import { parseLatencyTargets } from "@/utils/latency-targets";
+
 type Book = Record<string, { key: string; res: { data?: unknown } }[]>;
 
 /** Demo-only analytics. Production always reads persisted measurements from the API. */
@@ -22,6 +24,27 @@ export function demoNodeAnalytics(
   const params = new URLSearchParams(path.split("?")[1]);
 
   if (match[2] === "quality") {
+    const config = book["config/list"]?.[0]?.res.data as
+      | Record<string, string>
+      | undefined;
+    const pool = parseLatencyTargets(config?.latency_targets);
+    const nodes = book["node/list"]?.[0]?.res.data as
+      | { id: number; latencyTargets?: { points: string[] } | null }[]
+      | undefined;
+    const choice = Array.isArray(nodes)
+      ? nodes.find((node) => node.id === id)?.latencyTargets
+      : null;
+    const own = choice
+      ? pool.filter((target) => choice.points.includes(target.name))
+      : [];
+    const allowed = new Set(
+      (choice?.points.length === 0
+        ? []
+        : own.length
+          ? own
+          : pool.filter((target) => target.enabled)
+      ).map((target) => target.name),
+    );
     const entry = book["node/latency/history"]
       ?.filter((e) => JSON.parse(e.key).id === id)
       .sort((a, b) => JSON.parse(b.key).hours - JSON.parse(a.key).hours)[0];
@@ -62,6 +85,7 @@ export function demoNodeAnalytics(
       };
     };
     const points = (source?.points ?? [])
+      .filter((point) => allowed.has(point.name))
       .map((p) => {
         const point = {
           ...p,

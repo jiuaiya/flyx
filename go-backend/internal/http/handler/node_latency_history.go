@@ -288,6 +288,37 @@ func buildTrendBuckets(samples []model.NodeLatencySample, bucket int64) []trendP
 
 func round1(v float64) float64 { return float64(int64(v*10+0.5)) / 10 }
 
+// Historical measurements may belong to targets a node no longer measures.
+// Resolve the same effective selection as the prober before building any chart
+// or summary. An explicit empty selection must not fall back to all history.
+func (h *Handler) nodeLatencySamplesForCurrentTargets(nodeID, since int64) ([]model.NodeLatencySample, error) {
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	if node == nil {
+		return nil, fmt.Errorf("节点不存在")
+	}
+	allowed := make(map[string]bool)
+	for _, target := range targetsForNode(h.latencyPool(), node.LatencyTargets) {
+		allowed[target.Name] = true
+	}
+	if len(allowed) == 0 {
+		return nil, nil
+	}
+	samples, err := h.repo.ListNodeLatencySamples(nodeID, since)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]model.NodeLatencySample, 0, len(samples))
+	for _, sample := range samples {
+		if allowed[sample.Point] {
+			filtered = append(filtered, sample)
+		}
+	}
+	return filtered, nil
+}
+
 // nodeLatencyHistory returns a node's latency to each reference point over
 // the last 24 hours (or the hours asked, up to the monitoring retention).
 func (h *Handler) nodeLatencyHistory(w http.ResponseWriter, r *http.Request) {
@@ -308,7 +339,7 @@ func (h *Handler) nodeLatencyHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UnixMilli()
 	since := now - int64(req.Hours)*int64(time.Hour/time.Millisecond)
-	samples, err := h.repo.ListNodeLatencySamples(req.ID, since)
+	samples, err := h.nodeLatencySamplesForCurrentTargets(req.ID, since)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return

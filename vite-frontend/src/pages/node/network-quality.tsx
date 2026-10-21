@@ -177,6 +177,13 @@ export function NodeNetworkQuality({
         if (res.code !== 0 || !res.data || !Array.isArray(res.data.points))
           throw new Error(res.msg || "加载网络质量失败");
         setData(res.data);
+        const available = new Set(res.data.points.map((point) => point.name));
+
+        setSelected((current) =>
+          current.every((name) => available.has(name))
+            ? current
+            : current.filter((name) => available.has(name)),
+        );
       })
       .catch((err: unknown) => {
         if (!cancelled)

@@ -157,7 +157,7 @@ func (h *Handler) handleNodeQuality(w http.ResponseWriter, r *http.Request, node
 	}
 	until := time.Now().UnixMilli()
 	since := until - int64(hours)*time.Hour.Milliseconds()
-	samples, err := h.repo.ListNodeLatencySamples(id, since)
+	samples, err := h.nodeLatencySamplesForCurrentTargets(id, since)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return

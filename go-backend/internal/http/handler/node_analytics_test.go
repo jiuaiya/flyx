@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -85,7 +86,8 @@ func TestNodeTrafficLocalPeriodsMissingAndIdle(t *testing.T) {
 }
 
 func TestNodeAnalyticsRoutesPermissionsAndIsolation(t *testing.T) {
-	h, repo := setupLatencyHandler(t, "")
+	h, repo := setupLatencyHandler(t, `[{"name":"A","host":"a.example.com","port":80,"enabled":true}]`)
+	mustCreateLatencyNode(t, repo, "one", 1, 0)
 	now := time.Now()
 	hour := now.Truncate(time.Hour).UnixMilli()
 	if err := repo.AddNodeTraffic([]model.NodeTraffic{{NodeID: 1, Hour: hour, InBytes: 40}, {NodeID: 2, Hour: hour, InBytes: 9000}}); err != nil {
@@ -139,5 +141,98 @@ func TestNodeAnalyticsRoutesPermissionsAndIsolation(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || result.Code == 0 {
 			t.Fatalf("invalid request accepted: %s: %s", path, w.Body.String())
 		}
+	}
+}
+
+func TestNodeQualityAndHistoryRespectCurrentNodeTargets(t *testing.T) {
+	h, repo := setupLatencyHandler(t, testLatencyPool)
+	id := mustCreateLatencyNode(t, repo, "selected targets", 1, 0)
+	now := time.Now().UnixMilli()
+	samples := []model.NodeLatencySample{
+		{NodeID: id, CreatedTime: now, Point: "电信", OK: 1, LatencyMs: 20},
+		{NodeID: id, CreatedTime: now, Point: "联通", OK: 1, LatencyMs: 40},
+		{NodeID: id, CreatedTime: now, Point: "移动", OK: 1, LatencyMs: 60},
+		{NodeID: id, CreatedTime: now, Point: "旧目标", OK: 1, LatencyMs: 9999, LossPct: 100},
+	}
+	if err := repo.InsertNodeLatencySamples(samples); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, choice string
+		want         []string
+		average      float64
+		max          float64
+	}{
+		{"defaults", "", []string{"电信", "联通"}, 30, 40},
+		{"own selection including non-default target", `{"points":["移动"],"pinned":[]}`, []string{"移动"}, 60, 60},
+		{"explicitly none", `{"points":[],"pinned":[]}`, nil, 0, 0},
+		{"all choices removed uses defaults", `{"points":["旧目标"]}`, []string{"电信", "联通"}, 30, 40},
+		{"removed target alongside valid choice", `{"points":["旧目标","移动"]}`, []string{"移动"}, 60, 60},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := repo.SetNodesLatencyTargets([]int64{id}, tc.choice); err != nil {
+				t.Fatal(err)
+			}
+			for _, hours := range []string{"1", "24", "720"} {
+				w := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodGet, "/?hours="+hours+"&interval=5", nil)
+				h.handleNodeQuality(w, req, itoa(id))
+				var got struct {
+					Code int             `json:"code"`
+					Data nodeQualityData `json:"data"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got.Code != 0 {
+					t.Fatalf("quality: %s", w.Body.String())
+				}
+				if len(got.Data.Points) != len(tc.want) || got.Data.Summary.SampleCount != len(tc.want) {
+					t.Fatalf("quality includes unselected history: %s", w.Body.String())
+				}
+				for _, point := range got.Data.Points {
+					if !containsString(tc.want, point.Name) {
+						t.Fatalf("unselected target %q", point.Name)
+					}
+				}
+				if len(tc.want) > 0 {
+					if *got.Data.Summary.AvgMs != tc.average || *got.Data.Summary.P95Ms != tc.max || *got.Data.Summary.LossPct != 0 || len(got.Data.Events) != 1 || *got.Data.Events[0].Ms != tc.max {
+						t.Fatalf("unselected history affected statistics/events: %s", w.Body.String())
+					}
+				} else if got.Data.Summary.AvgMs != nil || len(got.Data.Events) != 0 {
+					t.Fatalf("disabled monitoring must show no records: %s", w.Body.String())
+				}
+			}
+			w := httptest.NewRecorder()
+			h.nodeLatencyHistory(w, httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"id":`+itoa(id)+`,"hours":24}`)))
+			var history struct {
+				Code int `json:"code"`
+				Data struct {
+					Points []trendPoint `json:"points"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &history); err != nil || history.Code != 0 || len(history.Data.Points) != len(tc.want) {
+				t.Fatalf("legacy history: %s", w.Body.String())
+			}
+			for _, point := range history.Data.Points {
+				if !containsString(tc.want, point.Name) {
+					t.Fatalf("legacy history includes unselected target: %q", point.Name)
+				}
+			}
+		})
+	}
+	// A chart's target query can narrow the node selection, never re-enable it.
+	if err := repo.SetNodesLatencyTargets([]int64{id}, `{"points":["移动"]}`); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/?hours=24&target=电信&target=旧目标", nil)
+	h.handleNodeQuality(w, req, itoa(id))
+	var selected struct {
+		Data nodeQualityData `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &selected); err != nil || selected.Data.Summary.SampleCount != 0 || len(selected.Data.Events) != 0 || len(selected.Data.Points) != 1 || selected.Data.Points[0].Name != "移动" {
+		t.Fatalf("query must not include unselected targets: %s", w.Body.String())
+	}
+	stored, err := repo.ListNodeLatencySamples(id, now-1)
+	if err != nil || len(stored) != len(samples) {
+		t.Fatalf("filtering must preserve stored history: %v, %v", stored, err)
 	}
 }
