@@ -136,6 +136,11 @@ export const getUserPackageInfo = () =>
 export const createNode = (data: NodeMutationPayload) =>
   Network.post("/node/create", data);
 export const getNodeList = () => Network.post<NodeApiItem[]>("/node/list");
+/** Each node's traffic since the 1st of this month (viewer's time zone): id → [in, out]. */
+export const getNodeMonthTraffic = () =>
+  Network.post<Record<string, [number, number]>>("/node/traffic/month", {
+    tzOffset: -new Date().getTimezoneOffset(),
+  });
 export const getDashboardNodeExpiryList = () =>
   Network.post<NodeApiItem[]>("/node/list", {});
 export const updateNode = (data: NodeMutationPayload) =>

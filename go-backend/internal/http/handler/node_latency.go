@@ -28,7 +28,7 @@ const (
 	latencyPingTimeoutMS    = 2000
 	latencyParallel         = 16
 	// The agent runs eight TCP probes at once; allow both waves to finish.
-	latencyAgentParallel  = 8
+	latencyAgentParallel  = agentTCPPingLimit
 	latencyPingWaves      = (latencyParallel + latencyAgentParallel - 1) / latencyAgentParallel
 	latencyCommandTimeout = time.Duration(latencyPingWaves*latencyPingCount*(latencyPingTimeoutMS+200))*time.Millisecond + 5*time.Second
 )
@@ -267,6 +267,8 @@ func latencyPointFrom(t latencyTarget, data map[string]interface{}, err error) l
 func latencyCommandError(err error) string {
 	msg := strings.TrimSpace(err.Error())
 	switch {
+	case errors.Is(err, errTCPPingQueueTimeout):
+		return msg
 	case strings.Contains(msg, "任务过多"), strings.Contains(msg, "并发过多"):
 		return "节点繁忙，请稍后重试"
 	case strings.Contains(msg, "队列已满"), strings.Contains(msg, "TCP探测"):
@@ -308,23 +310,32 @@ func (h *Handler) probeNodeLatency(ctx context.Context, ids []int64) (map[int64]
 		}
 	}
 
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, latencyParallel)
+	type job struct {
+		nodeID int64
+		i      int
+		t      latencyTarget
+	}
+	var jobs []job
 	for nodeID, list := range targets {
 		for i, t := range list {
-			if ctx.Err() != nil {
-				break
-			}
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(nodeID int64, i int, t latencyTarget) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				data, err := nodeLatencyPing(h, nodeID, t.Host, t.Port)
-				// Each goroutine writes its own slot.
-				points[nodeID][i] = latencyPointFrom(t, data, err)
-			}(nodeID, i, t)
+			jobs = append(jobs, job{nodeID, i, t})
 		}
+	}
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, latencyParallel)
+	for _, j := range interleaveByNode(jobs, func(j job) int64 { return j.nodeID }) {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(j job) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			data, err := nodeLatencyPing(h, j.nodeID, j.t.Host, j.t.Port)
+			// Each goroutine writes its own slot.
+			points[j.nodeID][j.i] = latencyPointFrom(j.t, data, err)
+		}(j)
 	}
 	wg.Wait()
 	now := time.Now().UnixMilli()

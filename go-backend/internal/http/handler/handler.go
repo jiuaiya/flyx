@@ -29,7 +29,9 @@ import (
 )
 
 type Handler struct {
-	repo            *repo.Repository
+	repo *repo.Repository
+	// pingSlots keeps each node's TcpPing commands within the agent's limit.
+	pingSlots       *nodePingSlots
 	jwtSecret       string
 	wsServer        *ws.Server
 	metrics         *metrics.IngestionService
@@ -128,6 +130,7 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		relayLatency:             newRelayLatencyStore(),
 		latencyAlerts:            newLatencyAlertTracker(),
 		notifier:                 newNotifier(),
+		pingSlots:                newNodePingSlots(),
 	}
 	h.healthCheck = health.NewChecker(repo, h.wsServer)
 	h.qualityProber = newTunnelQualityProber(h)
@@ -344,6 +347,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/announcement/update", h.updateAnnouncement)
 
 	mux.HandleFunc("/api/v1/monitor/access", h.monitorAccessHandler)
+	mux.HandleFunc("/api/v1/node/traffic/month", h.nodeTrafficMonth)
 	mux.HandleFunc("/api/v1/monitor/nodes/", h.monitorNodeMetricsHandler)
 	mux.HandleFunc("/api/v1/monitor/nodes", h.monitorNodeListHandler)
 	mux.HandleFunc("/api/v1/monitor/tunnels", h.monitorTunnelListHandler)

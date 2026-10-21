@@ -39,9 +39,10 @@ import {
   getPeerRemoteUsageList,
   dismissNodeExpiryReminder,
   probeNodeLatency,
+  getNodeMonthTraffic,
   type ReleaseChannel,
 } from "@/api";
-import { LatencyCell } from "@/components/latency-cell";
+import { LatencyCell, probePoints } from "@/components/latency-cell";
 import { RouteModal } from "@/components/route-modal";
 import { LatencyTrendModal } from "@/components/latency-trend-modal";
 import { LatencyTargetsModal } from "@/pages/node/latency-targets-modal";
@@ -99,14 +100,18 @@ import {
   UpgradeNodeModal,
 } from "@/pages/node/agent-modals";
 import { NodeFilterModal } from "@/pages/node/filter-modal";
+import { NodeLiveStats } from "@/pages/node/node-live-stats";
 
 export default function NodePage({
   embedded = false,
   addRequest = 0,
+  onOpenMonitor,
 }: {
   embedded?: boolean;
   /** Bumped by the 节点 page header's 新建节点 when embedded. */
   addRequest?: number;
+  /** Opens a node's history charts and service monitors. */
+  onOpenMonitor?: (nodeId: number) => void;
 }) {
   const [nodeList, setNodeList] = useState<Node[]>([]);
   const [nodeOrder, setNodeOrder] = useState<number[]>([]);
@@ -256,6 +261,28 @@ export default function NodePage({
     useState<ReleaseChannel>("stable");
   const [selectedVersion, setSelectedVersion] = useState("");
   const [batchUpgradeLoading, setBatchUpgradeLoading] = useState(false);
+  // This month's traffic per node, for the rows.
+  const [monthTraffic, setMonthTraffic] = useState<
+    Record<string, [number, number]>
+  >({});
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const res = await getNodeMonthTraffic();
+
+      if (active && res.code === 0 && res.data) setMonthTraffic(res.data);
+    };
+
+    void load();
+    const timer = window.setInterval(load, 60_000);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
   const [upgradeProgress, setUpgradeProgress] = useState<
     Record<number, { stage: string; percent: number; message: string }>
   >({});
@@ -1175,7 +1202,9 @@ export default function NodePage({
         >
           不测延迟
         </button>
-      ) : (
+      ) : probePoints(node.latency).length === 0 ? null : (
+        // Nothing until the first round (every 3 minutes) has a result;
+        // re-probing is in the result's menu.
         <LatencyCell
           note={node.latencyTargets ? "自定义" : undefined}
           probe={node.latency}
@@ -1786,87 +1815,82 @@ export default function NodePage({
                                 {getRemoteSyncErrorMessage(node.syncError)}
                               </div>
                             )}
-                            {/* 基础信息 */}
-                            <div className="space-y-2 mb-4">
-                              {node.expiryTime &&
-                                node.expiryTime > 0 &&
-                                node.renewalCycle && <div className="hidden" />}
-                              <div className="flex justify-between items-center text-sm min-w-0">
-                                <span className="text-default-600 flex-shrink-0">
-                                  IP
-                                </span>
-                                <div className="text-right text-xs min-w-0 flex-1 ml-2 min-h-[2.125rem]">
-                                  {node.serverIpV4?.trim() ||
-                                  node.serverIpV6?.trim() ? (
-                                    <div className="space-y-0.5">
-                                      {node.serverIpV4?.trim() && (
-                                        <span
-                                          className="font-mono truncate block"
-                                          title={node.serverIpV4.trim()}
-                                        >
-                                          {node.serverIpV4.trim()}
-                                        </span>
-                                      )}
-                                      {node.serverIpV6?.trim() && (
-                                        <span
-                                          className="font-mono truncate block"
-                                          title={node.serverIpV6.trim()}
-                                        >
-                                          {node.serverIpV6.trim()}
-                                        </span>
-                                      )}
-                                    </div>
-                                  ) : (
-                                    <span
-                                      className="font-mono truncate block"
-                                      title={node.serverIp.trim()}
-                                    >
-                                      {node.serverIp.trim()}
-                                    </span>
-                                  )}
+                            {isRemoteNode ? (
+                              <div className="space-y-2 mb-4">
+                                <div className="flex justify-between items-center text-sm min-w-0">
+                                  <span className="text-default-600 flex-shrink-0">
+                                    IP
+                                  </span>
+                                  <div className="text-right text-xs min-w-0 flex-1 ml-2 min-h-[2.125rem]">
+                                    {node.serverIpV4?.trim() ||
+                                    node.serverIpV6?.trim() ? (
+                                      <div className="space-y-0.5">
+                                        {node.serverIpV4?.trim() && (
+                                          <span
+                                            className="font-mono truncate block"
+                                            title={node.serverIpV4.trim()}
+                                          >
+                                            {node.serverIpV4.trim()}
+                                          </span>
+                                        )}
+                                        {node.serverIpV6?.trim() && (
+                                          <span
+                                            className="font-mono truncate block"
+                                            title={node.serverIpV6.trim()}
+                                          >
+                                            {node.serverIpV6.trim()}
+                                          </span>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span
+                                        className="font-mono truncate block"
+                                        title={node.serverIp.trim()}
+                                      >
+                                        {node.serverIp.trim()}
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
-                              {!isRemoteNode && (
-                                <>
-                                  <div className="flex justify-between text-sm">
-                                    <span className="text-default-600">
-                                      版本
-                                    </span>
-                                    <span className="text-xs">
-                                      {node.version || "未知"}
-                                    </span>
-                                  </div>
-                                  {upgradeProgress[node.id] &&
-                                    upgradeProgress[node.id].percent < 100 && (
-                                      <div className="mt-1">
-                                        <Progress
-                                          showValueLabel
-                                          aria-label="升级进度"
-                                          color="warning"
-                                          label={
-                                            upgradeProgress[node.id].message
-                                          }
-                                          size="sm"
-                                          value={
-                                            upgradeProgress[node.id].percent
-                                          }
-                                        />
-                                      </div>
-                                    )}
-                                  <div className="flex justify-between text-sm">
-                                    <span className="text-default-600">
-                                      开机时间
-                                    </span>
-                                    <span className="text-xs">
-                                      {node.connectionStatus === "online" &&
-                                      node.systemInfo
-                                        ? formatUptime(node.systemInfo.uptime)
-                                        : "-"}
-                                    </span>
-                                  </div>
-                                </>
-                              )}
-                            </div>
+                            ) : (
+                              <div className="mb-4 space-y-3">
+                                <p className="truncate font-mono text-xs text-default-500">
+                                  {[
+                                    node.serverIpV4?.trim() ||
+                                      node.serverIpV6?.trim() ||
+                                      node.serverIp.trim(),
+                                    node.version || "未连接过",
+                                    node.connectionStatus === "online" &&
+                                    node.systemInfo
+                                      ? `已运行 ${formatUptime(node.systemInfo.uptime)}`
+                                      : "",
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" · ")}
+                                </p>
+                                {upgradeProgress[node.id] &&
+                                  upgradeProgress[node.id].percent < 100 && (
+                                    <Progress
+                                      showValueLabel
+                                      aria-label="升级进度"
+                                      color="warning"
+                                      label={upgradeProgress[node.id].message}
+                                      size="sm"
+                                      value={upgradeProgress[node.id].percent}
+                                    />
+                                  )}
+                                <NodeLiveStats
+                                  info={
+                                    node.connectionStatus === "online"
+                                      ? (node.systemInfo ?? null)
+                                      : null
+                                  }
+                                  month={monthTraffic[String(node.id)]}
+                                  variant="card"
+                                />
+                              </div>
+                            )}
 
                             {isRemoteNode && (
                               <div className="space-y-3 mb-4">
@@ -2025,9 +2049,22 @@ export default function NodePage({
 
                             <div className="mt-auto space-y-3">
                               {/* 操作按钮 */}
-                              <div className="space-y-1.5">
+                              <div
+                                className={`grid gap-1.5 ${isRemoteNode ? "grid-cols-1" : "grid-cols-3"}`}
+                              >
                                 {!isRemoteNode && (
-                                  <div className="grid grid-cols-3 gap-1.5">
+                                  <>
+                                    {onOpenMonitor && (
+                                      <Button
+                                        className="min-h-8"
+                                        color="primary"
+                                        size="sm"
+                                        variant="flat"
+                                        onPress={() => onOpenMonitor(node.id)}
+                                      >
+                                        监控
+                                      </Button>
+                                    )}
                                     <Button
                                       className="min-h-8"
                                       color="success"
@@ -2037,6 +2074,14 @@ export default function NodePage({
                                       onPress={() => openInstallSelector(node)}
                                     >
                                       安装
+                                    </Button>
+                                    <Button
+                                      className="min-h-8 bg-default-100 text-default-700"
+                                      size="sm"
+                                      variant="flat"
+                                      onPress={() => setTargetNodes([node])}
+                                    >
+                                      测试点
                                     </Button>
                                     <Button
                                       className="min-h-8"
@@ -2066,12 +2111,6 @@ export default function NodePage({
                                     >
                                       回退
                                     </Button>
-                                  </div>
-                                )}
-                                <div
-                                  className={`grid gap-1.5 ${isRemoteNode ? "grid-cols-1" : "grid-cols-3"}`}
-                                >
-                                  {!isRemoteNode && (
                                     <Button
                                       className="min-h-8"
                                       color="success"
@@ -2084,8 +2123,6 @@ export default function NodePage({
                                     >
                                       调优
                                     </Button>
-                                  )}
-                                  {!isRemoteNode && (
                                     <Button
                                       className="min-h-8"
                                       color="primary"
@@ -2095,17 +2132,17 @@ export default function NodePage({
                                     >
                                       编辑
                                     </Button>
-                                  )}
-                                  <Button
-                                    className="min-h-8"
-                                    color="danger"
-                                    size="sm"
-                                    variant="flat"
-                                    onPress={() => handleDelete(node)}
-                                  >
-                                    删除
-                                  </Button>
-                                </div>
+                                  </>
+                                )}
+                                <Button
+                                  className="min-h-8"
+                                  color="danger"
+                                  size="sm"
+                                  variant="flat"
+                                  onPress={() => handleDelete(node)}
+                                >
+                                  删除
+                                </Button>
                               </div>
                             </div>
                           </CardBody>
@@ -2173,10 +2210,29 @@ export default function NodePage({
                             )}
                           </>
                         }
+                        footer={
+                          !isRemoteNode && (
+                            <NodeLiveStats
+                              info={online ? (node.systemInfo ?? null) : null}
+                              month={monthTraffic[String(node.id)]}
+                              variant="footer"
+                            />
+                          )
+                        }
                         meta={meta.filter(Boolean).join(" · ")}
                         right={
                           <>
-                            {renderLatency(node, "list")}
+                            {!isRemoteNode && (
+                              <NodeLiveStats
+                                info={online ? (node.systemInfo ?? null) : null}
+                                month={monthTraffic[String(node.id)]}
+                                variant="row"
+                              />
+                            )}
+                            {/* A fixed slot keeps the stats in line across rows. */}
+                            <div className="contents lg:flex lg:w-36 lg:justify-end">
+                              {renderLatency(node, "list")}
+                            </div>
                             {!isDisplayFiltered && (
                               <span
                                 className="cursor-grab touch-none p-1 text-default-300 hover:text-default-500 active:cursor-grabbing"
@@ -2282,6 +2338,16 @@ export default function NodePage({
                       },
                     ]
                   : [
+                      ...(onOpenMonitor
+                        ? [
+                            {
+                              key: "monitor",
+                              label: "监控",
+                              color: "primary" as const,
+                              onPress: () => onOpenMonitor(node.id),
+                            },
+                          ]
+                        : []),
                       {
                         key: "install",
                         label: "安装命令",

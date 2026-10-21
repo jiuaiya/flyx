@@ -7,6 +7,7 @@ import { AnimatedPage } from "@/components/animated-page";
 import { PageHeader, PageTabs } from "@/components/page-kit";
 import NodePage from "@/pages/node";
 import { KernelsTab } from "@/pages/node/kernels-tab";
+import { NodeMonitorDetail } from "@/pages/monitor";
 
 type NodeTab = "nodes" | "kernels";
 
@@ -20,7 +21,9 @@ const TAB_KEY = "flvx_node_tab";
 
 function readTab(): NodeTab {
   try {
-    return localStorage.getItem(TAB_KEY) === "kernels" ? "kernels" : "nodes";
+    const t = localStorage.getItem(TAB_KEY);
+
+    return t === "kernels" ? t : "nodes";
   } catch {
     return "nodes"; // remembering the tab is only a convenience
   }
@@ -38,9 +41,12 @@ export default function NodeHubPage() {
     state.install ?? null,
   );
   const [addNode, setAddNode] = useState(0);
+  // A node's 监控 replaces the list; the list stays mounted underneath.
+  const [monitorNode, setMonitorNode] = useState<number | null>(null);
 
   const setTab = (t: NodeTab) => {
     setTabState(t);
+    setMonitorNode(null);
     try {
       localStorage.setItem(TAB_KEY, t);
     } catch {
@@ -59,11 +65,11 @@ export default function NodeHubPage() {
         description={
           tab === "kernels"
             ? "节点上安装的 Xray / sing-box / Snell 等内核，落地的入站跑在内核上"
-            : "装了 agent 的服务器，用来搭建落地和中转"
+            : "装了 agent 的服务器：实时状态、监控和管理都在这里"
         }
         // The kernel tab has its own 安装内核 button.
         primary={
-          tab === "nodes"
+          tab === "nodes" && monitorNode === null
             ? {
                 key: "add",
                 label: "新建节点",
@@ -87,7 +93,22 @@ export default function NodeHubPage() {
           onInstallRequestHandled={() => setInstall(null)}
         />
       ) : (
-        <NodePage embedded addRequest={addNode} />
+        <>
+          {monitorNode !== null && (
+            <NodeMonitorDetail
+              key={monitorNode}
+              nodeId={monitorNode}
+              onBack={() => setMonitorNode(null)}
+            />
+          )}
+          <div className={monitorNode !== null ? "hidden" : ""}>
+            <NodePage
+              embedded
+              addRequest={addNode}
+              onOpenMonitor={setMonitorNode}
+            />
+          </div>
+        </>
       )}
     </AnimatedPage>
   );

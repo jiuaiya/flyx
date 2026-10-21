@@ -136,6 +136,7 @@ func TestLatencyPointPreservesFailureReason(t *testing.T) {
 		{name: "read commands busy", err: errors.New("只读命令并发过多，请稍后重试"), want: "节点繁忙，请稍后重试"},
 		{name: "queue full", err: errors.New("TCP探测队列已满，请稍后重试"), want: "TCP探测队列已满，请稍后重试"},
 		{name: "queue expired", err: errors.New("TCP探测排队超时"), want: "TCP探测排队超时"},
+		{name: "panel queue expired", err: errTCPPingQueueTimeout, want: "节点上的 TCP 探测排队超时"},
 		{name: "execution expired", err: errors.New("TCP探测执行超时（含排队等待）"), want: "TCP探测执行超时（含排队等待）"},
 		{name: "offline", err: errors.New("节点不在线"), want: "节点离线"},
 		{name: "command timeout", err: errors.New("等待节点响应超时"), want: "节点响应超时"},

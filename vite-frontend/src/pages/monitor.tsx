@@ -1,6 +1,7 @@
 import type { MonitorNodeApiItem } from "@/api/types";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Navigate } from "react-router-dom";
 import toast from "react-hot-toast";
 
 import { AnimatedPage } from "@/components/animated-page";
@@ -10,6 +11,7 @@ import { getMonitorNodes } from "@/api";
 import { MonitorView } from "@/pages/node/monitor-view";
 import { TunnelMonitorView } from "@/pages/node/tunnel-monitor-view";
 import { useNodeRealtime } from "@/pages/node/use-node-realtime";
+import { isAdmin } from "@/utils/auth";
 
 type MonitorNode = {
   id: number;
@@ -30,7 +32,15 @@ const formatBytesPerSecond = (bytesPerSecond: number): string => {
   return `${parseFloat((bytesPerSecond / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
 };
 
+/**
+ * 监控: admins have it under 节点 (each node's 监控) and 中转 (质量); users
+ * allowed to see monitoring get this overview.
+ */
 export default function MonitorPage() {
+  return isAdmin() ? <Navigate replace to="/node" /> : <MonitorOverview />;
+}
+
+function MonitorOverview() {
   const [nodes, setNodes] = useState<MonitorNodeApiItem[]>([]);
   const [nodesLoading, setNodesLoading] = useState(false);
   const [nodesError, setNodesError] = useState<string | null>(null);
@@ -249,4 +259,58 @@ export default function MonitorPage() {
       )}
     </AnimatedPage>
   );
+}
+
+/**
+ * One node's monitoring, opened from the node list: live figures, history
+ * charts and its service monitors.
+ */
+export function NodeMonitorDetail({
+  nodeId,
+  onBack,
+}: {
+  nodeId: number;
+  onBack: () => void;
+}) {
+  const [nodes, setNodes] = useState<MonitorNodeApiItem[]>([]);
+
+  useEffect(() => {
+    let active = true;
+
+    (async () => {
+      try {
+        const res = await getMonitorNodes();
+
+        if (!active) return;
+        if (res.code === 0 && Array.isArray(res.data)) setNodes(res.data);
+        else toast.error(res.msg || "加载节点失败");
+      } catch {
+        if (active) toast.error("加载节点失败");
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const nodeMap = useMemo(
+    () =>
+      new Map<number, MonitorNode>(
+        nodes
+          .filter((n) => Number(n.id) > 0)
+          .map((n) => [
+            Number(n.id),
+            {
+              id: Number(n.id),
+              name: String(n.name ?? ""),
+              connectionStatus: n.status === 1 ? "online" : "offline",
+              version: n.version,
+            },
+          ]),
+      ),
+    [nodes],
+  );
+
+  return <MonitorView focusNodeId={nodeId} nodeMap={nodeMap} onBack={onBack} />;
 }

@@ -903,6 +903,18 @@ type NodeMetric struct {
 
 func (NodeMetric) TableName() string { return "node_metric" }
 
+// NodeTraffic is a node's network traffic in one hour (Hour: unix ms the
+// hour starts at), summed from the agent's byte counters.
+type NodeTraffic struct {
+	ID       int64 `gorm:"primaryKey;autoIncrement"`
+	NodeID   int64 `gorm:"column:node_id;not null;uniqueIndex:idx_node_traffic_hour,priority:1"`
+	Hour     int64 `gorm:"not null;uniqueIndex:idx_node_traffic_hour,priority:2;index:idx_node_traffic_time"`
+	InBytes  int64 `gorm:"column:in_bytes;not null;default:0"`
+	OutBytes int64 `gorm:"column:out_bytes;not null;default:0"`
+}
+
+func (NodeTraffic) TableName() string { return "node_traffic" }
+
 type TunnelMetric struct {
 	ID           int64   `gorm:"primaryKey;autoIncrement" json:"id"`
 	TunnelID     int64   `gorm:"column:tunnel_id;not null;uniqueIndex:idx_tunnel_metric_tunnel_time,priority:1" json:"tunnelId"`
