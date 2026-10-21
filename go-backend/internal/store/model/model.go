@@ -484,6 +484,7 @@ type KernelBackup struct {
 }
 
 type InboundBackup struct {
+	OutboundIPStrategy  string `json:"outboundIpStrategy,omitempty"`
 	ID                  int64  `json:"id"`
 	KernelID            int64  `json:"kernelId"`
 	NodeID              int64  `json:"nodeId"`

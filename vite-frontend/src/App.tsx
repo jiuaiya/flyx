@@ -25,11 +25,11 @@ const DashboardPage = lazy(() => import("@/pages/dashboard"));
 const MonitorPage = lazy(() => import("@/pages/monitor"));
 const ForwardPage = lazy(() => import("@/pages/forward"));
 const TunnelPage = lazy(() => import("@/pages/tunnel"));
-const NodePage = lazy(() => import("@/pages/node"));
-const UserPage = lazy(() => import("@/pages/user"));
-const GroupPage = lazy(() => import("@/pages/group"));
+// 用户 hosts the 分组 and 限速 tabs; each tab keeps its address.
+const UserHubPage = lazy(() => import("@/pages/user-hub"));
+// 节点 hosts the 内核 tab.
+const NodePage = lazy(() => import("@/pages/node-hub"));
 const ProfilePage = lazy(() => import("@/pages/profile"));
-const LimitPage = lazy(() => import("@/pages/limit"));
 const InboundPage = lazy(() => import("@/pages/inbound"));
 const RelayPage = lazy(() => import("@/pages/relay"));
 const SubscriptionPage = lazy(() => import("@/pages/subscription"));
@@ -239,7 +239,7 @@ function App() {
         <Route
           element={
             <ProtectedRoute useSimpleLayout={true}>
-              <UserPage />
+              <UserHubPage />
             </ProtectedRoute>
           }
           path="/user"
@@ -247,7 +247,7 @@ function App() {
         <Route
           element={
             <ProtectedRoute useSimpleLayout={true}>
-              <GroupPage />
+              <UserHubPage />
             </ProtectedRoute>
           }
           path="/group"
@@ -263,7 +263,7 @@ function App() {
         <Route
           element={
             <ProtectedRoute useSimpleLayout={true}>
-              <LimitPage />
+              <UserHubPage />
             </ProtectedRoute>
           }
           path="/limit"

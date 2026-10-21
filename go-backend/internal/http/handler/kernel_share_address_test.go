@@ -71,23 +71,36 @@ func TestShareAddressFamilyAndSubscriptions(t *testing.T) {
 	}
 }
 
-func TestExistingVisualTemplatesRegenerateWithoutWriting(t *testing.T) {
+func TestExistingVisualTemplatesKeepSavedContent(t *testing.T) {
 	b := kernel.TemplateBuilder{Version: 1, Preset: "custom", Final: "节点选择", Rules: []kernel.TemplateBuilderRule{{Type: "category", Value: "ai", Target: "节点选择"}}}
-	raw, _ := json.Marshal(b)
-	tpl := &model.SubscriptionTemplate{Kind: kernel.TemplateClash, Content: "old saved content", BuilderConfig: string(raw)}
-	content, recipe := effectiveTemplate(tpl)
-	if recipe == nil || !strings.Contains(content, "AI 服务") || !strings.Contains(content, "漏网之鱼") {
-		t.Fatal("saved recipe not regenerated")
+	// A generator change must not rewrite an already saved template when
+	// it is read: this content predates the independent service selectors.
+	shared := false
+	savedBuilder := b
+	savedBuilder.ServiceGroups = &shared
+	savedContent, err := kernel.BuildSubscriptionTemplate(kernel.TemplateClash, savedBuilder)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if tpl.Content != "old saved content" || tpl.BuilderConfig != string(raw) {
+	raw, _ := json.Marshal(b)
+	tpl := &model.SubscriptionTemplate{Kind: kernel.TemplateClash, Content: savedContent, BuilderConfig: string(raw)}
+	content, recipe := effectiveTemplate(tpl)
+	if recipe == nil || len(recipe.Rules) != 1 || recipe.Rules[0].Value != "ai" || content != savedContent {
+		t.Fatal("saved content and editable recipe must stay independent")
+	}
+	if tpl.Content != savedContent || tpl.BuilderConfig != string(raw) {
 		t.Fatal("read mutated saved data")
 	}
 	view := templateView(tpl, 1)
-	if view.Groups != 3 || view.Content != content {
+	if view.Groups != 1 || view.Content != content {
 		t.Fatalf("view differs: %+v", view)
 	}
 	tpl.BuilderConfig = ""
-	if c, _ := effectiveTemplate(tpl); c != "old saved content" {
+	if c, recipe := effectiveTemplate(tpl); c != savedContent || recipe != nil {
 		t.Fatal("raw templates must stay untouched")
+	}
+	tpl.BuilderConfig = "invalid JSON"
+	if c, recipe := effectiveTemplate(tpl); c != savedContent || recipe != nil {
+		t.Fatal("invalid recipe must not replace saved content")
 	}
 }

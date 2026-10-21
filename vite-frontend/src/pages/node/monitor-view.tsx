@@ -162,6 +162,103 @@ const getColorByUsage = (usage?: number) => {
   return "success";
 };
 
+const BAR_TONE: Record<string, string> = {
+  success: "bg-success",
+  primary: "bg-primary",
+  warning: "bg-warning",
+  danger: "bg-danger",
+  default: "bg-default-300",
+};
+
+/** A labelled usage bar for a list row (CPU, 内存). */
+function UsageMini({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="min-w-0 space-y-1">
+      <div className="flex items-baseline justify-between gap-2 text-[11px]">
+        <span className="text-default-500">{label}</span>
+        <span className="font-mono font-medium">{value.toFixed(1)}%</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-default-100">
+        <div
+          className={`h-full rounded-full ${BAR_TONE[getColorByUsage(value)]}`}
+          style={{ width: `${Math.max(2, Math.min(100, value))}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** Two stacked values (↑/↓ speed or traffic, connections/uptime). */
+function MetricPair({
+  label,
+  top,
+  bottom,
+}: {
+  label: string;
+  top: React.ReactNode;
+  bottom: React.ReactNode;
+}) {
+  return (
+    <div className="min-w-0 text-[11px] leading-4">
+      <div className="text-default-500">{label}</div>
+      <div className="truncate font-mono">{top}</div>
+      <div className="truncate font-mono">{bottom}</div>
+    </div>
+  );
+}
+
+/**
+ * Live metrics under a node's list row. Phones show CPU, memory and speed
+ * (the rest is in the row's meta line); wider screens spread every metric
+ * across the row.
+ */
+function NodeMetricsStrip({ metric }: { metric: RealtimeNodeMetric }) {
+  const up = <span className="font-bold text-primary-500">↑</span>;
+  const down = <span className="font-bold text-success-500">↓</span>;
+
+  return (
+    <div className="grid grid-cols-3 gap-3 md:grid-cols-5 md:gap-6">
+      <UsageMini label="CPU" value={metric.cpuUsage} />
+      <UsageMini label="内存" value={metric.memoryUsage} />
+      <MetricPair
+        bottom={
+          <>
+            {down} {formatBytesPerSecond(metric.netInSpeed)}
+          </>
+        }
+        label="网速"
+        top={
+          <>
+            {up} {formatBytesPerSecond(metric.netOutSpeed)}
+          </>
+        }
+      />
+      <div className="hidden md:block">
+        <MetricPair
+          bottom={
+            <>
+              {down} {formatBytes(metric.netInBytes)}
+            </>
+          }
+          label="累计流量"
+          top={
+            <>
+              {up} {formatBytes(metric.netOutBytes)}
+            </>
+          }
+        />
+      </div>
+      <div className="hidden md:block">
+        <MetricPair
+          bottom={`已运行 ${formatUptime(metric.uptime)}`}
+          label="连接 / 运行"
+          top={`TCP ${metric.tcpConns} · UDP ${metric.udpConns}`}
+        />
+      </div>
+    </div>
+  );
+}
+
 /** A node in the card view (the original upstream design). */
 function ServerCard({
   node,
@@ -360,8 +457,8 @@ const NodeMetricsChartCard = React.memo(function NodeMetricsChartCard({
       case "network":
         return {
           lines: [
-            { dataKey: "netIn", color: "#10b981", name: "入站速度" },
-            { dataKey: "netOut", color: "#ef4444", name: "出站速度" },
+            { dataKey: "netIn", color: "#10b981", name: "接收速度" },
+            { dataKey: "netOut", color: "#ef4444", name: "发送速度" },
           ],
           yAxisLabel: "速度 (bytes/s)",
         };
@@ -1346,25 +1443,16 @@ export function MonitorView({
                 return (
                   <ListRow
                     key={node.id}
+                    footer={live ? <NodeMetricsStrip metric={metric} /> : null}
                     meta={
                       live ? (
-                        <span className="flex flex-wrap gap-x-3 whitespace-normal font-mono">
-                          <span>CPU {metric.cpuUsage.toFixed(1)}%</span>
-                          <span>内存 {metric.memoryUsage.toFixed(1)}%</span>
-                          <span>
-                            ↑{formatBytesPerSecond(metric.netOutSpeed)} ↓
-                            {formatBytesPerSecond(metric.netInSpeed)}
-                          </span>
-                          <span>
-                            流量 ↑{formatBytes(metric.netOutBytes)} ↓
-                            {formatBytes(metric.netInBytes)}
-                          </span>
-                          <span className="hidden sm:inline">
-                            连接 {metric.tcpConns + metric.udpConns}
-                          </span>
-                          <span className="hidden sm:inline">
-                            运行 {formatUptime(metric.uptime)}
-                          </span>
+                        // Wider screens show these in the metrics strip.
+                        <span className="md:hidden">
+                          {[
+                            `TCP ${metric.tcpConns} · UDP ${metric.udpConns}`,
+                            `运行 ${formatUptime(metric.uptime)}`,
+                            `流量 ↑${formatBytes(metric.netOutBytes)} ↓${formatBytes(metric.netInBytes)}`,
+                          ].join(" · ")}
                         </span>
                       ) : isOnline ? (
                         "在线 · 等待指标"

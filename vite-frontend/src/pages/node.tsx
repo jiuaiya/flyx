@@ -18,7 +18,6 @@ import {
 import { GripVertical } from "lucide-react";
 
 import { formatTraffic } from "@/utils/traffic";
-import { AnimatedPage } from "@/components/animated-page";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
@@ -52,6 +51,7 @@ import {
   EmptyHint,
   ListRow,
   PageHeader,
+  PageShell,
   PageTabs,
   PageToolbar,
   SelectionBar,
@@ -100,7 +100,14 @@ import {
 } from "@/pages/node/agent-modals";
 import { NodeFilterModal } from "@/pages/node/filter-modal";
 
-export default function NodePage() {
+export default function NodePage({
+  embedded = false,
+  addRequest = 0,
+}: {
+  embedded?: boolean;
+  /** Bumped by the 节点 page header's 新建节点 when embedded. */
+  addRequest?: number;
+}) {
   const [nodeList, setNodeList] = useState<Node[]>([]);
   const [nodeOrder, setNodeOrder] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
@@ -711,6 +718,11 @@ export default function NodePage() {
     setProtocolDisabled(true);
     setProtocolDisabledReason("节点未在线，等待节点上线后再设置");
   };
+
+  useEffect(() => {
+    if (addRequest > 0) handleAdd();
+    // Only a new request opens the dialog.
+  }, [addRequest]);
 
   // 编辑节点
   const handleEdit = (node: Node) => {
@@ -1453,12 +1465,14 @@ export default function NodePage() {
   );
 
   return (
-    <AnimatedPage className="px-3 lg:px-6 py-6">
-      <PageHeader
-        description="装了 agent 的服务器，用来搭建落地和中转"
-        primary={{ key: "add", label: "新建节点", onPress: handleAdd }}
-        title="节点"
-      />
+    <PageShell embedded={embedded}>
+      {!embedded && (
+        <PageHeader
+          description="装了 agent 的服务器，用来搭建落地和中转"
+          primary={{ key: "add", label: "新建节点", onPress: handleAdd }}
+          title="节点"
+        />
+      )}
       {remoteNodes.length > 0 && (
         <PageTabs
           tabs={[
@@ -2457,6 +2471,6 @@ export default function NodePage() {
         onClose={() => setTargetNodes([])}
         onSaved={() => loadNodes({ silent: true })}
       />
-    </AnimatedPage>
+    </PageShell>
   );
 }
