@@ -414,7 +414,14 @@ func (h *Handler) inboundProbeView(row *model.NodeInbound) *reachProbe {
 	reach, hasReach := h.reachProbes.get(row.ID)
 	if !isExternalInbound(row) {
 		if node, ok := h.nodeLatency.get(row.NodeID); ok && len(node.Points) > 0 {
+			// The view combines a port check with reference-point samples.
+			// Recovering the port must not move its timestamp backwards to an
+			// older node sample, or clients will keep the newer cached failure.
+			if hasReach {
+				node.CheckedAt = max(node.CheckedAt, reach.CheckedAt)
+			}
 			if hasReach && !reach.Skipped && !reach.OK {
+				reach.CheckedAt = node.CheckedAt
 				return &reach
 			}
 			view := h.withRoutes(row.NodeID, node)

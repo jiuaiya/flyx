@@ -168,3 +168,27 @@ func TestInboundReachRoundsSerializeAndCancelWithoutChangingCache(t *testing.T) 
 		t.Fatalf("fresh result not stored: %+v", p)
 	}
 }
+
+func TestInboundRecoveryViewDoesNotGoBackToOlderNodeSampleTime(t *testing.T) {
+	h, _ := setupLatencyHandler(t, "")
+	row := model.NodeInbound{ID: 1, NodeID: 1, KernelID: 1}
+	h.nodeLatency.replace(map[int64]reachProbe{1: {OK: true, CheckedAt: 100, Points: []latencyPoint{{Name: "电信", OK: true, LatencyMs: 25}}}}, false)
+	h.reachProbes.replace(map[int64]reachProbe{1: {CheckedAt: 200, Error: "无法连接"}}, false)
+	if view := h.inboundProbeView(&row); view == nil || view.OK || view.CheckedAt != 200 {
+		t.Fatalf("initial port failure: %+v", view)
+	}
+	h.reachProbes.replace(map[int64]reachProbe{1: {OK: true, CheckedAt: 300}}, false)
+	if view := h.inboundProbeView(&row); view == nil || !view.OK || view.CheckedAt != 300 || view.Points[0].LatencyMs != 25 {
+		t.Fatalf("recovered view would be rejected as older than the failure: %+v", view)
+	}
+	// A node sample collected while a port round was still running must not
+	// make the subsequent combined failure appear older than the shown view.
+	h.nodeLatency.replace(map[int64]reachProbe{1: {OK: true, CheckedAt: 400, Points: []latencyPoint{{Name: "电信", OK: true, LatencyMs: 20}}}}, false)
+	h.reachProbes.replace(map[int64]reachProbe{1: {CheckedAt: 350, Error: "无法连接"}}, false)
+	if view := h.inboundProbeView(&row); view == nil || view.OK || view.CheckedAt != 400 {
+		t.Fatalf("combined port failure: %+v", view)
+	}
+	if cached, _ := h.nodeLatency.get(1); cached.CheckedAt != 400 {
+		t.Fatal("combining a view changed the stored node sample")
+	}
+}
