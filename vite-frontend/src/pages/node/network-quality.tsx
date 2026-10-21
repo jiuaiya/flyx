@@ -69,6 +69,8 @@ const statLabel = (
   key: keyof NodeQualityStats,
 ) => numberLabel(s?.[key]);
 
+type QualityLegendEntry = { value?: string; inactive?: boolean };
+
 function QualityTooltip({
   active,
   payload,
@@ -78,18 +80,22 @@ function QualityTooltip({
   payload?: {
     dataKey: string;
     name: string;
+    hide?: boolean;
     value: number | null;
     color: string;
     payload: Record<string, number | null>;
   }[];
   label?: number;
 }) {
-  if (!active || !payload?.length || label == null) return null;
+  // Keep missing samples while excluding hidden lines, independently of filterNull.
+  const visiblePayload = payload?.filter((point) => point.hide !== true);
+
+  if (!active || !visiblePayload?.length || label == null) return null;
 
   return (
     <div className="min-w-48 rounded-xl border border-divider bg-content1 p-3 text-xs shadow-xl">
       <p className="mb-2 text-default-500">{analyticsDate(label)}</p>
-      {payload.map((p) => {
+      {visiblePayload.map((p) => {
         const loss = p.payload[`${p.dataKey}loss`];
 
         return (
@@ -139,6 +145,7 @@ export function NodeNetworkQuality({
   const [hours, setHours] = useState(24);
   const [interval, setIntervalMinutes] = useState(0);
   const [selected, setSelected] = useState<string[]>([]);
+  const [hiddenLines, setHiddenLines] = useState<string[]>([]);
   const [compare, setCompare] = useState(false);
   const [worst, setWorst] = useState(false);
   const [connect, setConnect] = useState(true);
@@ -167,6 +174,8 @@ export function NodeNetworkQuality({
   );
   const targets = selected.length ? selected : worst ? worstNames : [];
   const targetsKey = JSON.stringify(targets);
+
+  useEffect(() => setHiddenLines([]), [nodeId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -216,6 +225,9 @@ export function NodeNetworkQuality({
       ? [{ point, index, color: colors[index % colors.length] }]
       : [],
   );
+  const visible = shown.filter(
+    ({ point }) => !hiddenLines.includes(point.name),
+  );
   const targetList = worst
     ? (data?.points ?? [])
         .filter((p) => worstNames.includes(p.name))
@@ -252,7 +264,7 @@ export function NodeNetworkQuality({
       )
     : chartRows;
   const yAxis = latencyChartScale(
-    plotted.flatMap((row) => shown.map(({ index }) => row[`s${index}`])),
+    plotted.flatMap((row) => visible.map(({ index }) => row[`s${index}`])),
   );
   const summary = data?.summary;
   const rangeLabel = ranges.find(([h]) => h === hours)?.[1];
@@ -701,16 +713,42 @@ export function NodeNetworkQuality({
                       ticks={yAxis.ticks}
                       width={64}
                     />
-                    <Tooltip content={<QualityTooltip />} filterNull={false} />
+                    <Tooltip
+                      content={<QualityTooltip />}
+                      filterNull={false}
+                      includeHidden={false}
+                    />
                     <Legend
-                      formatter={(value: string) => (
-                        <span className="text-foreground">{value}</span>
+                      formatter={(value: string, entry: QualityLegendEntry) => (
+                        <button
+                          aria-label={`${value}曲线`}
+                          aria-pressed={!entry.inactive}
+                          className={cn(
+                            "min-h-6 rounded-sm px-0.5 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                            entry.inactive
+                              ? "text-default-400"
+                              : "text-foreground",
+                          )}
+                          title={`${entry.inactive ? "显示" : "隐藏"} ${value}`}
+                          type="button"
+                        >
+                          {value}
+                        </button>
                       )}
                       iconSize={20}
                       iconType="line"
+                      inactiveColor="var(--default-400)"
                       itemSorter={null}
                       verticalAlign="top"
                       wrapperStyle={{ paddingBottom: 28, fontSize: 12 }}
+                      onClick={({ value }: QualityLegendEntry) => {
+                        if (value == null) return;
+                        setHiddenLines((current) =>
+                          current.includes(value)
+                            ? current.filter((name) => name !== value)
+                            : [...current, value],
+                        );
+                      }}
                     />
                     {shown.map(({ point, index, color }) => (
                       <Line
@@ -719,6 +757,7 @@ export function NodeNetworkQuality({
                         connectNulls={connect}
                         dataKey={`s${index}`}
                         dot={false}
+                        hide={hiddenLines.includes(point.name)}
                         isAnimationActive={false}
                         name={point.name}
                         stroke={color}
@@ -801,6 +840,9 @@ export function NodeNetworkQuality({
                   className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left text-xs hover:bg-default-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
                   type="button"
                   onClick={() => {
+                    setHiddenLines((current) =>
+                      current.filter((name) => name !== event.name),
+                    );
                     setFocus(event.t);
                     const window = Math.max(
                       data.intervalMs * 4,

@@ -48,7 +48,9 @@ export function AnalyticsState({
 
 /** Export the actual plotted SVG as a PNG, with the current theme resolved. */
 export async function saveChartImage(container: HTMLElement, filename: string) {
-  const source = container.querySelector("svg.recharts-surface");
+  const source = container.querySelector(
+    ".recharts-wrapper > svg.recharts-surface",
+  );
 
   if (!source) throw new Error("图表尚未加载");
   const svg = source.cloneNode(true) as SVGElement;
