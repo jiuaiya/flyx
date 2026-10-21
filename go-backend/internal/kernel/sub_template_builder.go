@@ -22,12 +22,16 @@ type TemplateBuilder struct {
 	Groups        []TemplateBuilderGroup `json:"groups"`
 	Rules         []TemplateBuilderRule  `json:"rules"`
 	Final         string                 `json:"final"`
+	// Icons overrides group icons by category key, IconMain or IconFinal;
+	// a missing key keeps the default.
+	Icons map[string]string `json:"icons,omitempty"`
 }
 
 type TemplateBuilderGroup struct {
 	Name   string `json:"name"`
 	Type   string `json:"type"`
 	Filter string `json:"filter"`
+	Icon   string `json:"icon,omitempty"`
 }
 
 type TemplateBuilderRule struct {
@@ -39,18 +43,51 @@ type TemplateBuilderRule struct {
 type TemplateRuleCategory struct {
 	Key     string   `json:"key"`
 	Name    string   `json:"name"`
-	Icon    string   `json:"icon"`
+	Icon    string   `json:"icon"` // image URL
 	Target  string   `json:"target"`
 	Presets []string `json:"presets"`
 	set     ruleSet
 }
 
+// Group icons are Koolson/Qure PNGs (the set Surge and Quantumult X users
+// know), served through jsDelivr. Mihomo and Stash read them from a group's
+// icon field, Surge from icon-url; sing-box has no group icon.
+const (
+	qureIconURL = "https://cdn.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/"
+	// Qure has no Pixiv icon.
+	pixivIconURL = "https://cdn.jsdelivr.net/gh/lige47/QuanX-icon-rule@master/icon/04ProxySoft/pixiv.png"
+)
+
+func qureIcon(name string) string { return qureIconURL + name + ".png" }
+
+// Icon keys besides the category keys.
+const (
+	IconMain  = "__main"
+	IconFinal = "__final"
+	IconAuto  = "__auto" // default for url-test groups
+)
+
+// BuilderDefaultIcons are the default icons of the groups that are not
+// categories.
+func BuilderDefaultIcons() map[string]string {
+	return map[string]string{IconMain: builderGroupIcons[IconMain], IconFinal: builderGroupIcons[IconFinal], IconAuto: builderGroupIcons[IconAuto]}
+}
+
+var builderGroupIcons = map[string]string{
+	IconMain: qureIcon("Proxy"), IconFinal: qureIcon("Final"), IconAuto: qureIcon("Auto"),
+	"private": qureIcon("WiFi"), "ads": qureIcon("Advertising"), "ai": qureIcon("AI"),
+	"github": qureIcon("GitHub"), "youtube": qureIcon("YouTube"), "netflix": qureIcon("Netflix"),
+	"spotify": qureIcon("Spotify"), "abema": qureIcon("AbemaTV"), "media": qureIcon("ForeignMedia"),
+	"telegram": qureIcon("Telegram"), "google": qureIcon("Google_Search"), "microsoft": qureIcon("Microsoft"),
+	"apple": qureIcon("Apple"), "bilibili": qureIcon("bilibili"), "games": qureIcon("Game"),
+	"pixiv": pixivIconURL, "scholar": qureIcon("Scholar"), "cn": qureIcon("China"), "noncn": qureIcon("Global"),
+}
+
 // TemplateRuleCategories reuses our subscription rule sources, with a few
 // smaller categories for users who want to choose services individually.
 func TemplateRuleCategories() []TemplateRuleCategory {
-	all := []TemplateRuleCategory{{Key: "private", Name: "私有网络", Icon: "🏠", Target: "DIRECT",
+	all := []TemplateRuleCategory{{Key: "private", Name: "私有网络", Target: "DIRECT",
 		set: ruleSet{sites: []string{"private"}, ips: []string{"private"}, lists: []string{"Lan"}}}}
-	icons := map[string]string{"ads": "🚫", "ai": "🤖", "youtube": "📺", "netflix": "🎬", "media": "🎞️", "telegram": "✈️", "google": "🔎", "microsoft": "🪟", "apple": "🍎", "games": "🎮"}
 	for _, d := range ruleGroupDefs {
 		target := builderMain
 		if d.pick == pickDirect {
@@ -58,23 +95,26 @@ func TemplateRuleCategories() []TemplateRuleCategory {
 		} else if d.pick == pickReject {
 			target = "REJECT"
 		}
-		all = append(all, TemplateRuleCategory{Key: d.key, Name: d.name, Icon: icons[d.key], Target: target, set: d.set})
+		all = append(all, TemplateRuleCategory{Key: d.key, Name: d.name, Target: target, set: d.set})
 	}
-	for _, d := range []struct{ key, name, icon, site, list, target string }{
-		{"github", "GitHub", "🐱", "github", "GitHub", builderMain},
-		{"bilibili", "哔哩哔哩", "📺", "bilibili", "BiliBili", "DIRECT"},
-		{"spotify", "Spotify", "🎵", "spotify", "Spotify", builderMain},
-		{"pixiv", "Pixiv", "🎨", "pixiv", "Pixiv", builderMain},
-		{"abema", "Abema", "📡", "abema", "Abema", builderMain},
-		{"scholar", "教育资源", "📚", "category-scholar-!cn", "Scholar", builderMain},
+	for _, d := range []struct{ key, name, site, list, target string }{
+		{"github", "GitHub", "github", "GitHub", builderMain},
+		{"bilibili", "哔哩哔哩", "bilibili", "BiliBili", "DIRECT"},
+		{"spotify", "Spotify", "spotify", "Spotify", builderMain},
+		{"pixiv", "Pixiv", "pixiv", "Pixiv", builderMain},
+		{"abema", "Abema", "abema", "Abema", builderMain},
+		{"scholar", "教育资源", "category-scholar-!cn", "Scholar", builderMain},
 	} {
-		all = append(all, TemplateRuleCategory{Key: d.key, Name: d.name, Icon: d.icon, Target: d.target,
+		all = append(all, TemplateRuleCategory{Key: d.key, Name: d.name, Target: d.target,
 			set: ruleSet{sites: []string{d.site}, lists: []string{d.list}}})
 	}
 	all = append(all,
-		TemplateRuleCategory{Key: "cn", Name: "国内服务", Icon: "🇨🇳", Target: "DIRECT", set: ruleSet{sites: []string{"cn"}, ips: []string{"cn"}, lists: []string{"China", "ChinaIPs"}}},
-		TemplateRuleCategory{Key: "noncn", Name: "非中国", Icon: "🌍", Target: builderMain, set: ruleSet{sites: []string{"geolocation-!cn"}, lists: []string{"Global"}}},
+		TemplateRuleCategory{Key: "cn", Name: "国内服务", Target: "DIRECT", set: ruleSet{sites: []string{"cn"}, ips: []string{"cn"}, lists: []string{"China", "ChinaIPs"}}},
+		TemplateRuleCategory{Key: "noncn", Name: "非中国", Target: builderMain, set: ruleSet{sites: []string{"geolocation-!cn"}, lists: []string{"Global"}}},
 	)
+	for i := range all {
+		all[i].Icon = builderGroupIcons[all[i].Key]
+	}
 	order := strings.Fields("private ads ai github youtube netflix spotify abema media telegram google microsoft apple bilibili games pixiv scholar cn noncn")
 	rank := map[string]int{}
 	for i, key := range order {
@@ -127,12 +167,26 @@ func (b TemplateBuilder) validate() error {
 		if _, err := regexp.Compile(g.Filter); err != nil {
 			return fmt.Errorf("策略组「%s」的正则表达式无效：%w", g.Name, err)
 		}
+		if g.Icon != "" && !ValidIconURL(g.Icon) {
+			return fmt.Errorf("策略组「%s」的图标地址无效", g.Name)
+		}
 		targets[g.Name] = true
 	}
 	if !targets[b.Final] || b.Final == "REJECT" {
 		return fmt.Errorf("兜底去向请选择节点选择、策略组或直连")
 	}
 	categories, seen := builderCategories(), map[string]bool{}
+	if len(b.Icons) > 64 {
+		return fmt.Errorf("图标设置过多")
+	}
+	for key, icon := range b.Icons {
+		if _, ok := categories[key]; !ok && key != IconMain && key != IconFinal {
+			return fmt.Errorf("未知的图标位置：%s", key)
+		}
+		if !ValidIconURL(icon) {
+			return fmt.Errorf("图标地址无效：%s", icon)
+		}
+	}
 	for i, r := range b.Rules {
 		if !targets[r.Target] {
 			return fmt.Errorf("第 %d 条规则的策略组不存在：%s", i+1, r.Target)
@@ -160,6 +214,31 @@ func (b TemplateBuilder) validate() error {
 		}
 	}
 	return nil
+}
+
+// ValidIconURL accepts an http(s) image address that fits in a Surge group
+// line (comma-separated) and a YAML scalar.
+func ValidIconURL(s string) bool {
+	if len(s) > 500 || !(strings.HasPrefix(s, "https://") || strings.HasPrefix(s, "http://")) || len(s) <= len("https://") {
+		return false
+	}
+	return !strings.ContainsAny(s, ", \t\r\n\"'\\`")
+}
+
+// groupIcon is a group's icon: the recipe's choice, else the default.
+func (b TemplateBuilder) groupIcon(key string) string {
+	if icon, ok := b.Icons[key]; ok && icon != "" {
+		return icon
+	}
+	return builderGroupIcons[key]
+}
+
+// userGroupIcon is a node group's icon; url-test groups default to Auto.
+func userGroupIcon(g TemplateBuilderGroup) string {
+	if g.Icon != "" || g.Type != "url-test" {
+		return g.Icon
+	}
+	return builderGroupIcons[IconAuto]
 }
 
 func validBuilderDomain(s string) bool {
@@ -210,7 +289,7 @@ func buildClashTemplate(b TemplateBuilder) string {
 		members = append(members, g.Name)
 	}
 	members = append(members, "DIRECT")
-	groups := []interface{}{yamlNode{{"name", builderMain}, {"type", "select"}, {"include-all", true}, {"proxies", members}}}
+	groups := []interface{}{yamlNode{{"name", builderMain}, {"type", "select"}, {"include-all", true}, {"proxies", members}, {"icon", b.groupIcon(IconMain)}}}
 	for _, g := range b.Groups {
 		v := yamlNode{{"name", g.Name}, {"type", g.Type}, {"include-all", true}}
 		if g.Filter != "" {
@@ -219,10 +298,17 @@ func buildClashTemplate(b TemplateBuilder) string {
 		if g.Type == "url-test" {
 			v = append(v, yamlField{"url", "https://www.gstatic.com/generate_204"}, yamlField{"interval", 300})
 		}
+		if icon := userGroupIcon(g); icon != "" {
+			v = append(v, yamlField{"icon", icon})
+		}
 		groups = append(groups, v)
 	}
 	for _, g := range services {
-		groups = append(groups, yamlNode{{"name", g.Name}, {"type", "select"}, {"proxies", g.Members}, {"include-all", true}})
+		v := yamlNode{{"name", g.Name}, {"type", "select"}, {"proxies", g.Members}, {"include-all", true}}
+		if icon := b.groupIcon(g.Key); icon != "" {
+			v = append(v, yamlField{"icon", icon})
+		}
+		groups = append(groups, v)
 	}
 	providers, rules := yamlNode{}, []string{}
 	seen, categories := map[string]bool{}, builderCategories()
@@ -361,7 +447,7 @@ func buildSurgeTemplate(b TemplateBuilder) string {
 	for _, g := range b.Groups {
 		members = append(members, g.Name)
 	}
-	members = append(members, "DIRECT", "include-all-proxies=1")
+	members = append(members, "DIRECT", "include-all-proxies=1", "icon-url="+b.groupIcon(IconMain))
 	out.WriteString(builderMain + " = select, " + strings.Join(members, ", ") + "\n")
 	for _, g := range b.Groups {
 		line := g.Name + " = " + g.Type + ", include-all-proxies=1"
@@ -371,10 +457,17 @@ func buildSurgeTemplate(b TemplateBuilder) string {
 		if g.Type == "url-test" {
 			line += ", url=https://www.gstatic.com/generate_204, interval=300"
 		}
+		if icon := userGroupIcon(g); icon != "" {
+			line += ", icon-url=" + icon
+		}
 		out.WriteString(line + "\n")
 	}
 	for _, g := range services {
-		out.WriteString(g.Name + " = select, " + strings.Join(g.Members, ", ") + ", include-all-proxies=1\n")
+		line := g.Name + " = select, " + strings.Join(g.Members, ", ") + ", include-all-proxies=1"
+		if icon := b.groupIcon(g.Key); icon != "" {
+			line += ", icon-url=" + icon
+		}
+		out.WriteString(line + "\n")
 	}
 	out.WriteString("\n[Rule]\n")
 	categories := builderCategories()

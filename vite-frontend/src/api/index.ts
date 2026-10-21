@@ -716,6 +716,19 @@ export interface SubPipeline {
   /** Nodes picked for the chain, by their name before the pipeline. */
   chainLandingNames: string[];
   chainRelayNames: string[];
+  /** Whole remote sources in the chain (their nodes join the subscription). */
+  chainLandingSources: number[];
+  chainRelaySources: number[];
+  /** Every self-built node is a landing node. */
+  chainLandingOwn: boolean;
+  /** Nodes set to 不用 that a source or chainLandingOwn would take. */
+  chainNoneNames: string[];
+  /** Relay nodes stay out of the node lists; they are only in the relay group. */
+  chainHideRelays: boolean;
+  /** Per chain source (by id): only nodes whose original name matches take its role. */
+  chainSourceFilters?: Record<string, string>;
+  /** A chain source's nodes that end up without a role are left out. */
+  chainDropUnused: boolean;
   /** JavaScript `function operator(nodes)` run after the other steps. */
   script: string;
   /** Subscription template id per client kind; a kind without one gets the built-in profile. */
@@ -731,7 +744,13 @@ export interface SubTemplateBuilder {
   serviceGroups?: boolean;
   version: 1;
   preset: "minimal" | "balanced" | "full" | "custom";
-  groups: Array<{ name: string; type: "select" | "url-test"; filter: string }>;
+  groups: Array<{
+    name: string;
+    type: "select" | "url-test";
+    filter: string;
+    /** Image URL; empty keeps the default (Auto for url-test, none for select). */
+    icon?: string;
+  }>;
   rules: Array<{
     type:
       | "category"
@@ -743,16 +762,45 @@ export interface SubTemplateBuilder {
     target: string;
   }>;
   final: string;
+  /** Group icon overrides by category key, "__main" or "__final". */
+  icons?: Record<string, string>;
 }
 export interface SubTemplateCategory {
   key: string;
   name: string;
+  /** Image URL, also written into exported Mihomo / Surge groups. */
   icon: string;
   target: string;
   presets: string[];
 }
 export const getSubTemplateCatalog = () =>
   Network.post<SubTemplateCategory[]>("/subscription/template/catalog");
+
+/** An icon subscription (Quantumult X / Loon / BoxJs format) to pick group icons from. */
+export interface SubIconLibrary {
+  name: string;
+  url: string;
+  builtin?: boolean;
+}
+export interface SubIconLibraryIcon {
+  name: string;
+  url: string;
+}
+export const getSubIconLibraries = () =>
+  Network.post<{
+    libraries: SubIconLibrary[];
+    /** Default icons for "__main", "__final" and "__auto" (url-test groups). */
+    defaults: Record<string, string>;
+  }>("/subscription/icon-library/list");
+export const getSubIconLibraryIcons = (url: string) =>
+  Network.post<{ name: string; icons: SubIconLibraryIcon[] }>(
+    "/subscription/icon-library/icons",
+    { url },
+  );
+export const saveSubIconLibrary = (url: string) =>
+  Network.post<SubIconLibrary[]>("/subscription/icon-library/save", { url });
+export const deleteSubIconLibrary = (url: string) =>
+  Network.post<SubIconLibrary[]>("/subscription/icon-library/delete", { url });
 
 export type SubTemplateKind = "clash" | "singbox" | "surge";
 /** Clients a subscription picks a template for; Stash and Shadowrocket take Mihomo ("clash") templates. */
@@ -869,6 +917,10 @@ export interface SubPreviewItem {
   protocol: string;
   line: "direct" | "relay";
   chain?: "landing" | "relay";
+  /** Remote source of an imported node. */
+  sourceId?: number;
+  /** A self-built node. */
+  own?: boolean;
 }
 export const getSubscriptions = () =>
   Network.post<{
@@ -909,10 +961,38 @@ export const getMySubscriptions = () =>
 /** Gives one of the user's subscriptions a new link and credentials. */
 export const resetMySubscription = (id: number) =>
   Network.post<UserSubscription>("/user/subscription/reset", { id });
+export type SubTrafficRange = "hour" | "day" | "month";
+/** A subscription's traffic: 24 hours, 30 days or 12 months in the viewer's time zone. */
+export interface SubTraffic {
+  range: SubTrafficRange;
+  /** Each bucket's start (unix ms) and bytes. */
+  points: Array<{ time: number; up: number; down: number }>;
+  up: number;
+  down: number;
+}
+const trafficQuery = (id: number, range: SubTrafficRange) => ({
+  id,
+  range,
+  tzOffset: -new Date().getTimezoneOffset(),
+});
+
+export const getSubscriptionTraffic = (id: number, range: SubTrafficRange) =>
+  Network.post<SubTraffic>("/subscription/traffic", trafficQuery(id, range));
+/** The same for one of the logged-in user's subscriptions. */
+export const getMySubscriptionTraffic = (id: number, range: SubTrafficRange) =>
+  Network.post<SubTraffic>(
+    "/user/subscription/traffic",
+    trafficQuery(id, range),
+  );
+/** What a source's nodes are for in a chain: plain nodes, relays (前置) or landing nodes. */
+export type RemoteSourceRole = "" | "relay" | "landing";
 export interface RemoteSourceItem {
   id: number;
   name: string;
   url: string;
+  /** "file" sources are updated by uploading again. */
+  kind: "url" | "file";
+  role: RemoteSourceRole;
   /** 0 = refresh by hand only. */
   intervalHours: number;
   relayOnly: boolean;
@@ -936,6 +1016,10 @@ export const saveRemoteSource = (data: {
   id?: number;
   name: string;
   url: string;
+  kind?: "url" | "file";
+  role?: RemoteSourceRole;
+  /** The uploaded file (file sources). */
+  content?: string;
   intervalHours: number;
   relayOnly: boolean;
   enabled?: boolean;

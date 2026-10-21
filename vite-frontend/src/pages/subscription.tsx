@@ -37,6 +37,7 @@ import { Button } from "@/shadcn-bridge/heroui/button";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
 import { Input, Textarea } from "@/shadcn-bridge/heroui/input";
+import { SubTrafficStats } from "@/pages/subscription/traffic-stats";
 import {
   Modal,
   ModalBody,
@@ -93,6 +94,13 @@ const EMPTY_PIPELINE: SubPipeline = {
   ruleGroups: [],
   chainLandingNames: [],
   chainRelayNames: [],
+  chainLandingSources: [],
+  chainRelaySources: [],
+  chainLandingOwn: false,
+  chainNoneNames: [],
+  chainHideRelays: false,
+  chainSourceFilters: {},
+  chainDropUnused: false,
   script: "",
   templates: {},
 };
@@ -340,8 +348,15 @@ function gbText(bytes: number): string {
   return String(Number.isInteger(v) ? v : Number(v.toFixed(2)));
 }
 
-function draftFrom(s?: SubscriptionItem): Draft {
+function draftFrom(
+  s?: SubscriptionItem,
+  sources: RemoteSourceItem[] = [],
+): Draft {
   if (!s) {
+    const ids = (role: string) =>
+      sources.filter((x) => x.role === role).map((x) => x.id);
+    const relays = ids("relay");
+
     return {
       name: "",
       // New subscriptions get their own credentials, so any of them can
@@ -350,7 +365,16 @@ function draftFrom(s?: SubscriptionItem): Draft {
       sourceAll: true,
       inboundIds: [],
       sourceIds: [],
-      options: { ...EMPTY_PIPELINE },
+      // Sources marked as relays (an airport in front of the own nodes)
+      // set up the chain: they relay, the own nodes and landing sources
+      // are the exits.
+      options: {
+        ...EMPTY_PIPELINE,
+        chainRelaySources: relays,
+        chainLandingSources: ids("landing"),
+        chainLandingOwn: relays.length > 0,
+        chainHideRelays: true,
+      },
       expireTime: 0,
       expire: "",
       enabled: true,
@@ -453,16 +477,26 @@ function Editor({
   ).length;
 
   const runPreview = async () => {
+    // The chain editor lists the nodes dropping would hide too, so they
+    // can be picked back in.
+    const forChain = page === "rules" && o.chainDropUnused;
+
     setPreviewing(true);
     try {
-      const res = await previewSubscription(toPayload(draft));
+      const res = await previewSubscription(
+        toPayload(
+          forChain
+            ? { ...draft, options: { ...o, chainDropUnused: false } }
+            : draft,
+        ),
+      );
 
       if (res.code !== 0) {
         toast.error(res.msg || "预览失败");
 
         return;
       }
-      setPreview(res.data);
+      if (!forChain) setPreview(res.data);
       if (page === "rules") setChainNodes(res.data.items);
     } finally {
       setPreviewing(false);
@@ -476,36 +510,95 @@ function Editor({
     if (page === "rules" && !chainNodes && !previewing) void runPreview();
   }, [page, preview, chainNodes]);
 
-  const chainRole = (original: string): ChainRole =>
+  const sourceFilter = (id: number) => o.chainSourceFilters?.[id] ?? "";
+  // The role a node gets from its source (narrowed by the source's name
+  // filter) or being self-built, before any per-node choice.
+  const groupRole = (n: SubPreviewItem): ChainRole => {
+    if (n.sourceId) {
+      const match = nameMatcher(sourceFilter(n.sourceId));
+
+      if (match && !match(n.original)) return "";
+      if (o.chainLandingSources.includes(n.sourceId)) return "landing";
+      if (o.chainRelaySources.includes(n.sourceId)) return "relay";
+    }
+
+    return n.own && o.chainLandingOwn ? "landing" : "";
+  };
+  const pickedRole = (original: string): ChainRole | null =>
     o.chainLandingNames.includes(original)
       ? "landing"
       : o.chainRelayNames.includes(original)
         ? "relay"
-        : "";
-  const setChainRole = (original: string, role: ChainRole) => {
-    const without = (list: string[]) => list.filter((n) => n !== original);
+        : o.chainNoneNames.includes(original)
+          ? ""
+          : null;
+  const chainRole = (n: SubPreviewItem): ChainRole =>
+    pickedRole(n.original) ?? groupRole(n);
+  // A choice equal to what the source gives follows the source again.
+  const setChainRole = (n: SubPreviewItem, role: ChainRole) => {
+    const without = (list: string[]) => list.filter((x) => x !== n.original);
+    const own = role !== groupRole(n);
 
     setOpts({
       chainLandingNames:
-        role === "landing"
-          ? [...without(o.chainLandingNames), original]
+        own && role === "landing"
+          ? [...without(o.chainLandingNames), n.original]
           : without(o.chainLandingNames),
       chainRelayNames:
-        role === "relay"
-          ? [...without(o.chainRelayNames), original]
+        own && role === "relay"
+          ? [...without(o.chainRelayNames), n.original]
           : without(o.chainRelayNames),
+      chainNoneNames:
+        own && role === ""
+          ? [...without(o.chainNoneNames), n.original]
+          : without(o.chainNoneNames),
       // Picking replaces the older name expressions.
       chainLanding: "",
       chainRelay: "",
     });
   };
+  const setSourceRole = (id: number, role: ChainRole) => {
+    const without = (list: number[]) => list.filter((x) => x !== id);
+
+    const filters = { ...o.chainSourceFilters };
+
+    if (!role) delete filters[id];
+    setOpts({
+      chainLandingSources:
+        role === "landing"
+          ? [...without(o.chainLandingSources), id]
+          : without(o.chainLandingSources),
+      chainRelaySources:
+        role === "relay"
+          ? [...without(o.chainRelaySources), id]
+          : without(o.chainRelaySources),
+      chainSourceFilters: filters,
+      chainLanding: "",
+      chainRelay: "",
+    });
+    // The node list changes with the sources in the chain.
+    setChainNodes(null);
+  };
   const picked = o.templates ?? {};
   const templateOn = Object.values(picked).some(Boolean);
   const setTemplate = (kind: SubTemplateSlot, id: number) =>
     setOpts({ templates: { ...picked, [kind]: id || undefined } });
-  const chainOn =
-    (o.chainLandingNames.length > 0 && o.chainRelayNames.length > 0) ||
-    Boolean(o.chainLanding && o.chainRelay);
+  const chainPicked =
+    o.chainLandingNames.length > 0 ||
+    o.chainRelayNames.length > 0 ||
+    o.chainLandingSources.length > 0 ||
+    o.chainRelaySources.length > 0 ||
+    o.chainLandingOwn;
+  const chainCount = (role: ChainRole) =>
+    chainNodes?.filter((n) => chainRole(n) === role).length ?? 0;
+  const chainOn = chainNodes
+    ? chainCount("landing") > 0 && chainCount("relay") > 0
+    : chainPicked
+      ? (o.chainLandingNames.length > 0 ||
+          o.chainLandingSources.length > 0 ||
+          o.chainLandingOwn) &&
+        (o.chainRelayNames.length > 0 || o.chainRelaySources.length > 0)
+      : Boolean(o.chainLanding && o.chainRelay);
 
   const pickList = (title: string, list: InboundApiItem[]) =>
     list.length > 0 && (
@@ -687,25 +780,35 @@ function Editor({
                       <p className="text-xs text-default-500">
                         订阅源（整个源，更新后的节点自动跟上）
                       </p>
-                      {sources.map((src) => (
-                        <Checkbox
-                          key={src.id}
-                          className="w-full"
-                          isSelected={draft.sourceIds.includes(src.id)}
-                          onValueChange={(on) =>
-                            set({
-                              sourceIds: on
-                                ? [...draft.sourceIds, src.id]
-                                : draft.sourceIds.filter((x) => x !== src.id),
-                            })
-                          }
-                        >
-                          <span className="text-sm">{src.name}</span>
-                          <span className="ml-1 text-xs text-default-400">
-                            {src.nodeCount} 个节点
-                          </span>
-                        </Checkbox>
-                      ))}
+                      {sources.map((src) => {
+                        const inChain =
+                          o.chainRelaySources.includes(src.id) ||
+                          o.chainLandingSources.includes(src.id);
+
+                        return (
+                          <Checkbox
+                            key={src.id}
+                            className="w-full"
+                            isDisabled={inChain}
+                            isSelected={
+                              inChain || draft.sourceIds.includes(src.id)
+                            }
+                            onValueChange={(on) =>
+                              set({
+                                sourceIds: on
+                                  ? [...draft.sourceIds, src.id]
+                                  : draft.sourceIds.filter((x) => x !== src.id),
+                              })
+                            }
+                          >
+                            <span className="text-sm">{src.name}</span>
+                            <span className="ml-1 text-xs text-default-400">
+                              {src.nodeCount} 个节点
+                              {inChain && " · 链式代理在用，自动包含"}
+                            </span>
+                          </Checkbox>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -998,9 +1101,11 @@ function Editor({
               collapsible
               defaultOpen={false}
               summary={
-                chainOn
-                  ? `已开启 · 落地 ${o.chainLandingNames.length} 个 · 中转 ${o.chainRelayNames.length} 个`
-                  : "未开启"
+                !chainOn
+                  ? "未开启"
+                  : chainNodes
+                    ? `已开启 · 落地 ${chainCount("landing")} 个 · 中转 ${chainCount("relay")} 个`
+                    : "已开启"
               }
               title="链式代理"
             >
@@ -1037,10 +1142,102 @@ function Editor({
                 </p>
               )}
 
+              <div className="space-y-3">
+                <p className="text-xs font-medium">按来源</p>
+                <ToggleRow
+                  hint="自己面板上的节点（含它们的中转线路）都作为出口"
+                  id="chain-landing-own"
+                  label="自建节点都作为落地"
+                  value={o.chainLandingOwn}
+                  onChange={(chainLandingOwn) => {
+                    setOpts({
+                      chainLandingOwn,
+                      chainLanding: "",
+                      chainRelay: "",
+                    });
+                    setChainNodes(null);
+                  }}
+                />
+                {sources.length > 0 && (
+                  <div className="divide-y divide-divider rounded-xl border border-divider">
+                    {sources.map((src) => {
+                      const role: ChainRole = o.chainLandingSources.includes(
+                        src.id,
+                      )
+                        ? "landing"
+                        : o.chainRelaySources.includes(src.id)
+                          ? "relay"
+                          : "";
+
+                      const filter = sourceFilter(src.id);
+                      const ofSource =
+                        chainNodes?.filter((n) => n.sourceId === src.id) ?? [];
+                      const match = nameMatcher(filter);
+                      const matched = match
+                        ? ofSource.filter((n) => match(n.original)).length
+                        : ofSource.length;
+
+                      return (
+                        <div key={src.id} className="space-y-2 px-3 py-2">
+                          <div className="flex items-center gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-sm">{src.name}</div>
+                              <div className="truncate text-xs text-default-400">
+                                {role && filter && chainNodes
+                                  ? `匹配 ${matched} / ${ofSource.length} 个节点`
+                                  : `${src.nodeCount} 个节点`}
+                              </div>
+                            </div>
+                            <ChainRoleButtons
+                              value={role}
+                              onChange={(r) => setSourceRole(src.id, r)}
+                            />
+                          </div>
+                          {role && (
+                            <Input
+                              aria-label={`${src.name} 名称筛选`}
+                              placeholder="名称筛选，如 香港|日本；留空用全部"
+                              size="sm"
+                              value={filter}
+                              variant="bordered"
+                              onChange={(e) =>
+                                setOpts({
+                                  chainSourceFilters: {
+                                    ...o.chainSourceFilters,
+                                    [src.id]: e.target.value,
+                                  },
+                                })
+                              }
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <ToggleRow
+                  hint="中转节点只出现在「中转节点」组里，不混进节点选择、自动选择和地区组"
+                  id="chain-hide-relays"
+                  label="中转节点不单独列出"
+                  value={o.chainHideRelays}
+                  onChange={(chainHideRelays) => setOpts({ chainHideRelays })}
+                />
+                {(o.chainLandingSources.length > 0 ||
+                  o.chainRelaySources.length > 0) && (
+                  <ToggleRow
+                    hint="链式代理里的订阅源，没筛选上（或单独设成不用）的节点不放进订阅；不影响其他来源"
+                    id="chain-drop-unused"
+                    label="没用上的节点不放进订阅"
+                    value={o.chainDropUnused}
+                    onChange={(chainDropUnused) => setOpts({ chainDropUnused })}
+                  />
+                )}
+              </div>
+
               <div className="space-y-2">
-                <p className="text-xs font-medium">选择节点</p>
+                <p className="text-xs font-medium">按节点</p>
                 <p className="text-xs text-default-500">
-                  按节点设置角色；用的是处理前的原名，改名不影响
+                  单独调整某个节点，优先于来源设置；用的是处理前的原名，改名不影响
                 </p>
                 {!chainNodes ? (
                   <p className="py-6 text-center text-xs text-default-500">
@@ -1053,7 +1250,8 @@ function Editor({
                 ) : (
                   <div className="max-h-80 divide-y divide-divider overflow-y-auto rounded-xl border border-divider">
                     {chainNodes.map((n, i) => {
-                      const role = chainRole(n.original);
+                      const role = chainRole(n);
+                      const overridden = pickedRole(n.original) !== null;
 
                       return (
                         <div
@@ -1064,6 +1262,7 @@ function Editor({
                             <div className="truncate text-sm">{n.original}</div>
                             <div className="truncate text-xs text-default-400">
                               {[
+                                overridden && "单独设置",
                                 n.region,
                                 n.protocol,
                                 n.line === "relay" ? "中转线路" : "直连",
@@ -1072,32 +1271,10 @@ function Editor({
                                 .join(" · ")}
                             </div>
                           </div>
-                          <div className="flex shrink-0 gap-1">
-                            {(
-                              [
-                                ["", "不用"],
-                                ["landing", "落地"],
-                                ["relay", "中转"],
-                              ] as Array<[ChainRole, string]>
-                            ).map(([r, label]) => (
-                              <button
-                                key={r}
-                                className={`rounded-lg border px-2 py-1 text-xs transition-colors ${
-                                  role === r
-                                    ? r === "landing"
-                                      ? "border-warning bg-warning-50 text-warning-700 dark:bg-warning-500/20"
-                                      : r === "relay"
-                                        ? "border-secondary bg-secondary-50 text-secondary-700 dark:bg-secondary-500/20"
-                                        : "border-default-400 bg-default-100 text-default-700"
-                                    : "border-default-200 text-default-500 hover:border-default-400 dark:border-default-100"
-                                }`}
-                                type="button"
-                                onClick={() => setChainRole(n.original, r)}
-                              >
-                                {label}
-                              </button>
-                            ))}
-                          </div>
+                          <ChainRoleButtons
+                            value={role}
+                            onChange={(r) => setChainRole(n, r)}
+                          />
                         </div>
                       );
                     })}
@@ -1235,6 +1412,11 @@ export default function SubscriptionPage() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const [detail, setDetail] = useState<SubscriptionItem | null>(null);
+  const [detailTab, setDetailTab] = useState<"import" | "traffic">("import");
+
+  useEffect(() => {
+    if (!detail) setDetailTab("import");
+  }, [detail]);
   const [confirm, setConfirm] = useState<"reset" | "delete" | null>(null);
   const [toggling, setToggling] = useState<number | null>(null);
   const [resettingTraffic, setResettingTraffic] = useState(false);
@@ -1518,7 +1700,7 @@ export default function SubscriptionPage() {
         primary={{
           key: "create",
           label: "新建订阅",
-          onPress: () => setDraft(draftFrom()),
+          onPress: () => setDraft(draftFrom(undefined, sources)),
         }}
         secondary={{
           key: "templates",
@@ -1568,6 +1750,7 @@ export default function SubscriptionPage() {
         isOpen={Boolean(detail) && !confirm}
         placement="center"
         scrollBehavior="inside"
+        size="lg"
         onOpenChange={(open) => !open && setDetail(null)}
       >
         <ModalContent>
@@ -1613,40 +1796,54 @@ export default function SubscriptionPage() {
                       </Button>
                     </div>
                   </div>
-                  <Button
-                    className="w-full"
-                    color="primary"
-                    startContent={<Copy className="h-4 w-4" />}
-                    variant="flat"
-                    onPress={() => copyText(url(detail), "订阅链接已复制")}
-                  >
-                    复制订阅链接（自动识别客户端）
-                  </Button>
-                  <SubClientGrid
-                    configClients={Object.entries(
-                      detail.options.templates ?? {},
-                    )
-                      .filter(([, id]) => id)
-                      .map(([slot]) => slot)}
-                    link={(format) => url(detail, format)}
-                    name={detail.name}
-                    rules={detail.options.rules}
+                  <Segmented
+                    options={[
+                      ["import", "导入"],
+                      ["traffic", "流量统计"],
+                    ]}
+                    value={detailTab}
+                    onChange={setDetailTab}
                   />
-                  <p className="text-center text-xs text-default-400">
-                    点客户端直接导入，右侧按钮复制链接
-                  </p>
-                  {detail.options.rules && (
-                    <p className="text-xs text-default-500">
-                      已开启分流规则：Shadowrocket、Loon、Quantumult X
-                      导入的是完整配置，会替换 App 里原来的配置；Loon 和
-                      Quantumult X 复制链接后在 App 的配置里从 URL 下载
-                    </p>
-                  )}
-                  {detail.sharedIds.length > 0 && (
-                    <p className="text-xs text-warning">
-                      其中 {detail.sharedIds.length}{" "}
-                      个落地用的是共用凭据，停用后已导入的配置仍能连接
-                    </p>
+                  {detailTab === "traffic" ? (
+                    <SubTrafficStats id={detail.id} />
+                  ) : (
+                    <>
+                      <Button
+                        className="w-full"
+                        color="primary"
+                        startContent={<Copy className="h-4 w-4" />}
+                        variant="flat"
+                        onPress={() => copyText(url(detail), "订阅链接已复制")}
+                      >
+                        复制订阅链接（自动识别客户端）
+                      </Button>
+                      <SubClientGrid
+                        configClients={Object.entries(
+                          detail.options.templates ?? {},
+                        )
+                          .filter(([, id]) => id)
+                          .map(([slot]) => slot)}
+                        link={(format) => url(detail, format)}
+                        name={detail.name}
+                        rules={detail.options.rules}
+                      />
+                      <p className="text-center text-xs text-default-400">
+                        点客户端直接导入，右侧按钮复制链接
+                      </p>
+                      {detail.options.rules && (
+                        <p className="text-xs text-default-500">
+                          已开启分流规则：Shadowrocket、Loon、Quantumult X
+                          导入的是完整配置，会替换 App 里原来的配置；Loon 和
+                          Quantumult X 复制链接后在 App 的配置里从 URL 下载
+                        </p>
+                      )}
+                      {detail.sharedIds.length > 0 && (
+                        <p className="text-xs text-warning">
+                          其中 {detail.sharedIds.length}{" "}
+                          个落地用的是共用凭据，停用后已导入的配置仍能连接
+                        </p>
+                      )}
+                    </>
                   )}
                 </ModalBody>
                 <ModalFooter className="flex-wrap">
@@ -1756,4 +1953,79 @@ export default function SubscriptionPage() {
       </Modal>
     </AnimatedPage>
   );
+}
+
+/** 不用 / 落地 / 中转 for a node or a whole source. */
+function ChainRoleButtons({
+  value,
+  onChange,
+}: {
+  value: ChainRole;
+  onChange: (role: ChainRole) => void;
+}) {
+  return (
+    <div className="flex shrink-0 gap-1">
+      {(
+        [
+          ["", "不用"],
+          ["landing", "落地"],
+          ["relay", "中转"],
+        ] as Array<[ChainRole, string]>
+      ).map(([r, label]) => (
+        <button
+          key={r}
+          className={`rounded-lg border px-2 py-1 text-xs transition-colors ${
+            value === r
+              ? r === "landing"
+                ? "border-warning bg-warning-50 text-warning-700 dark:bg-warning-500/20"
+                : r === "relay"
+                  ? "border-secondary bg-secondary-50 text-secondary-700 dark:bg-secondary-500/20"
+                  : "border-default-400 bg-default-100 text-default-700"
+              : "border-default-200 text-default-500 hover:border-default-400 dark:border-default-100"
+          }`}
+          type="button"
+          onClick={() => onChange(r)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The panel's filter expression (as the backend parses it): /regex/, or
+ * keywords separated by "|", any of them, case-insensitive. Null when
+ * empty. Go's leading (?i) becomes the i flag.
+ */
+function nameMatcher(expr: string): ((name: string) => boolean) | null {
+  const e = expr.trim();
+
+  if (!e) return null;
+  if (e.length > 2 && e.startsWith("/") && e.endsWith("/")) {
+    let body = e.slice(1, -1);
+    let flags = "";
+
+    if (body.startsWith("(?i)")) {
+      body = body.slice(4);
+      flags = "i";
+    }
+    try {
+      const re = new RegExp(body, flags);
+
+      return (name) => re.test(name);
+    } catch {
+      return () => false;
+    }
+  }
+  const words = e
+    .split("|")
+    .map((w) => w.trim().toLowerCase())
+    .filter(Boolean);
+
+  return (name) => {
+    const lower = name.toLowerCase();
+
+    return words.some((w) => lower.includes(w));
+  };
 }
