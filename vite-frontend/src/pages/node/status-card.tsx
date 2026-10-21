@@ -267,14 +267,6 @@ export function NodeStatusCard({
               {node.remark.trim()}
             </p>
           )}
-          <button
-            className="flex w-full items-center justify-between text-xs text-default-500 transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            type="button"
-            onClick={selectMode ? onSelect : onOpen}
-          >
-            {remote ? "查看使用详情" : "查看节点详情"}
-            <ArrowUpRight className="h-3.5 w-3.5" />
-          </button>
         </div>
       </div>
     </Card>
