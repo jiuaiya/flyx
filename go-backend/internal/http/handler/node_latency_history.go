@@ -24,7 +24,7 @@ const (
 	notifyConfigLatencyMs      = "notify_latency_ms"
 
 	defaultLatencyAlertLossPct = 20
-	// latencyAlertStreak bad rounds in a row (about nine minutes) alert.
+	// latencyAlertStreak bad rounds in a row (about three minutes) alert.
 	latencyAlertStreak = 3
 
 	// maxTrendPoints caps the samples per point a trend returns.
@@ -216,7 +216,7 @@ type trendPoint struct {
 // sample failed has no latency.
 func buildTrend(samples []model.NodeLatencySample, sinceMs, nowMs int64) []trendPoint {
 	bucket := (nowMs - sinceMs) / maxTrendPoints
-	if bucket < int64(reachProbeInterval/time.Millisecond) {
+	if bucket < nodeLatencyProbeInterval.Milliseconds() {
 		bucket = 1 // one sample per bucket
 	}
 	return buildTrendBuckets(samples, bucket)

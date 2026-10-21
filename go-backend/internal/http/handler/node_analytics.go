@@ -48,6 +48,9 @@ type nodeQualityData struct {
 
 func qualityNumber(v float64) *float64 { v = round1(v); return &v }
 
+// Older history was collected every three minutes; retain its adjacent pairs.
+const nodeQualityJitterMaxGap = 6 * time.Minute
+
 func summarizeNodeQuality(samples []model.NodeLatencySample) nodeQualityStats {
 	stats := nodeQualityStats{SampleCount: len(samples)}
 	if len(samples) == 0 {
@@ -66,7 +69,7 @@ func summarizeNodeQuality(samples []model.NodeLatencySample) nodeQualityStats {
 		latencies = append(latencies, float64(s.LatencyMs))
 		sum += float64(s.LatencyMs)
 		if prev, ok := previous[s.Point]; ok && s.CreatedTime > prev.CreatedTime &&
-			s.CreatedTime-prev.CreatedTime <= 2*reachProbeInterval.Milliseconds() {
+			s.CreatedTime-prev.CreatedTime <= nodeQualityJitterMaxGap.Milliseconds() {
 			jitter += math.Abs(float64(s.LatencyMs - prev.LatencyMs))
 			pairs++
 		}
@@ -90,10 +93,10 @@ func summarizeNodeQuality(samples []model.NodeLatencySample) nodeQualityStats {
 
 func buildNodeQuality(samples []model.NodeLatencySample, since, until, interval int64, selected []string) nodeQualityData {
 	if interval == 0 {
-		interval = max((until-since)/maxTrendPoints, reachProbeInterval.Milliseconds())
+		interval = max((until-since)/maxTrendPoints, nodeLatencyProbeInterval.Milliseconds())
 	}
 	data := nodeQualityData{Since: since, Until: until, IntervalMs: interval,
-		ProbeIntervalMs: reachProbeInterval.Milliseconds(), Points: []nodeQualityTarget{}, Events: []nodeQualityEvent{}}
+		ProbeIntervalMs: nodeLatencyProbeInterval.Milliseconds(), Points: []nodeQualityTarget{}, Events: []nodeQualityEvent{}}
 	byName := map[string][]model.NodeLatencySample{}
 	wanted := map[string]bool{}
 	for _, name := range selected {

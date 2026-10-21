@@ -21,17 +21,43 @@ import (
 const latencyTargetsConfigKey = "latency_targets"
 
 const (
-	maxLatencyTargets       = 30
-	maxPinnedLatencyTargets = 3
-	maxLatencyTargetName    = 20
-	latencyPingCount        = 4
-	latencyPingTimeoutMS    = 2000
-	latencyParallel         = 16
+	nodeLatencyProbeInterval = time.Minute
+	maxLatencyTargets        = 30
+	maxPinnedLatencyTargets  = 3
+	maxLatencyTargetName     = 20
+	latencyPingCount         = 4
+	latencyPingTimeoutMS     = 2000
+	latencyParallel          = 16
 	// The agent runs eight TCP probes at once; allow both waves to finish.
 	latencyAgentParallel  = agentTCPPingLimit
 	latencyPingWaves      = (latencyParallel + latencyAgentParallel - 1) / latencyAgentParallel
 	latencyCommandTimeout = time.Duration(latencyPingWaves*latencyPingCount*(latencyPingTimeoutMS+200))*time.Millisecond + 5*time.Second
 )
+
+func (h *Handler) runNodeLatencyProbeLoop(ctx context.Context) {
+	defer h.jobsWG.Done()
+	ticker := time.NewTicker(nodeLatencyProbeInterval)
+	defer ticker.Stop()
+	h.runNodeLatencyProbeRounds(ctx, ticker.C)
+}
+
+// A slow round completes before the next one starts. Other probe jobs cannot
+// delay this schedule, and cancellation prevents another round from starting.
+func (h *Handler) runNodeLatencyProbeRounds(ctx context.Context, ticks <-chan time.Time) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if _, err := h.probeNodeLatency(ctx, nil); err != nil && ctx.Err() == nil {
+			log.Printf("node latency probe failed: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+		}
+	}
+}
 
 // latencyTarget is one reference point, e.g. a province's carrier CDN node.
 // Pinned points are the ones cards show first.

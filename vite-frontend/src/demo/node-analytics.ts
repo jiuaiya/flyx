@@ -51,9 +51,10 @@ export function demoNodeAnalytics(
     const source = entry?.res.data as LatencyTrend | undefined;
     const since = recordedAt - Number(params.get("hours") || 24) * 3600000;
     const targets = params.getAll("target");
+    const probeIntervalMs = 60000;
     const intervalMs =
       Number(params.get("interval") || 0) * 60000 ||
-      Math.max(180000, (recordedAt - since) / 400);
+      Math.max(probeIntervalMs, (recordedAt - since) / 400);
     const stats = (points: LatencyTrend["points"]): NodeQualityStats => {
       const samples = points.flatMap((p) => p.samples);
       const values = samples
@@ -114,7 +115,7 @@ export function demoNodeAnalytics(
       since,
       until: recordedAt,
       intervalMs,
-      probeIntervalMs: 180000,
+      probeIntervalMs,
       points,
       summary: stats(chosen),
       events: [

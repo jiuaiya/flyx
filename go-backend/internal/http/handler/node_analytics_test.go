@@ -57,6 +57,32 @@ func TestNodeQualityEmptyAndFailedSamplesAreNotZeroLatency(t *testing.T) {
 	}
 }
 
+func TestNodeQualityMinuteSamplingAndChartGrain(t *testing.T) {
+	minute := time.Minute.Milliseconds()
+	samples := []model.NodeLatencySample{
+		{Point: "A", CreatedTime: minute / 2, OK: 1, LatencyMs: 100},
+		{Point: "A", CreatedTime: minute + minute/2, OK: 1, LatencyMs: 200},
+		{Point: "A", CreatedTime: 2*minute + minute/2, OK: 1, LatencyMs: 300},
+	}
+	for _, interval := range []int64{0, minute, 5 * minute} {
+		got := buildNodeQuality(samples, 0, time.Hour.Milliseconds(), interval, nil)
+		want := interval
+		if want == 0 {
+			want = minute
+		}
+		if got.ProbeIntervalMs != minute || got.IntervalMs != want || got.Summary.SampleCount != 3 {
+			t.Fatalf("sampling and aggregation must be independent: %+v", got)
+		}
+		count := 3
+		if interval == 5*minute {
+			count = 1
+		}
+		if len(got.Points) != 1 || len(got.Points[0].Samples) != count || *got.Summary.AvgMs != 200 {
+			t.Fatalf("chart grain must preserve raw statistics: %+v", got)
+		}
+	}
+}
+
 func TestNodeTrafficLocalPeriodsMissingAndIdle(t *testing.T) {
 	zone := time.FixedZone("CST", 8*3600)
 	now := time.Date(2026, 11, 1, 0, 15, 0, 0, zone)
@@ -130,7 +156,7 @@ func TestNodeAnalyticsRoutesPermissionsAndIsolation(t *testing.T) {
 		Data nodeQualityData `json:"data"`
 	}
 	w = request("1/quality?hours=24&interval=5", 0)
-	if err := json.Unmarshal(w.Body.Bytes(), &quality); err != nil || quality.Code != 0 || len(quality.Data.Points) != 1 || *quality.Data.Summary.AvgMs != 25 || quality.Data.IntervalMs != 300000 {
+	if err := json.Unmarshal(w.Body.Bytes(), &quality); err != nil || quality.Code != 0 || len(quality.Data.Points) != 1 || *quality.Data.Summary.AvgMs != 25 || quality.Data.IntervalMs != 300000 || quality.Data.ProbeIntervalMs != 60000 {
 		t.Fatalf("quality must isolate node: %s", w.Body.String())
 	}
 	for _, path := range []string{"0/quality?hours=24", "1/quality?hours=721", "1/quality?hours=24&interval=2", "1/traffic?grain=year&tzOffset=0", "1/traffic?grain=hour&tzOffset=841"} {
