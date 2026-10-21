@@ -12,14 +12,13 @@ import {
   PageTabs,
   PageToolbar,
 } from "@/components/page-kit";
-import { CARD_GRID, InfoCard } from "@/components/info-card";
 import { RelayLatencyCell } from "@/components/relay-latency";
 import ForwardPage from "@/pages/forward";
 import { RelayModal } from "@/pages/inbound/relay-modal";
 import TunnelPage from "@/pages/tunnel";
 import { TunnelMonitorView } from "@/pages/node/tunnel-monitor-view";
+import { RelayLandingCard } from "@/pages/relay/relay-landing-card";
 import { Button } from "@/shadcn-bridge/heroui/button";
-import { Chip } from "@/shadcn-bridge/heroui/chip";
 
 type RelayTab = "lines" | "tunnels" | "rules" | "quality";
 
@@ -44,60 +43,6 @@ const TABS: Array<{ key: RelayTab; label: string }> = [
   { key: "rules", label: "规则" },
   { key: "quality", label: "质量" },
 ];
-
-/**
- * A line's own part of its name: "腾讯成都-YT → TW | Seednet FH" is shown
- * under that landing, so only "腾讯成都-YT" is new.
- */
-function relayLabel(l: InboundRelayApiItem): string {
-  const full = l.name || l.tunnelName || "中转";
-  const cut = full.lastIndexOf(" → ");
-
-  return cut > 0 ? full.slice(0, cut) : full;
-}
-
-/** A landing's relay lines: one row each, its relay and its latency. */
-function RelayLines({
-  lines,
-  renderLatency,
-}: {
-  lines: InboundRelayApiItem[];
-  renderLatency: (l: InboundRelayApiItem) => React.ReactNode;
-}) {
-  return (
-    <div className="divide-y divide-divider/70 rounded-xl bg-default-100/60">
-      {lines.map((l) => {
-        const entry = l.entries[0];
-        const ok = l.forwardExists && l.forwardStatus === 1;
-
-        return (
-          <div
-            key={l.id}
-            className="flex min-h-9 min-w-0 items-center gap-2 px-3 py-1.5"
-          >
-            <span
-              className={`h-1.5 w-1.5 shrink-0 rounded-full ${ok ? "bg-success" : "bg-warning"}`}
-              title={ok ? "转发正常" : "转发已暂停或被删除"}
-            />
-            <span
-              className="min-w-0 flex-1 truncate text-sm text-default-700"
-              title={l.name || l.tunnelName}
-            >
-              {relayLabel(l)}
-            </span>
-            <span className="shrink-0 text-xs">
-              {renderLatency(l) ?? (
-                <span className="font-mono text-default-400">
-                  {entry ? `${l.shareHost || entry.Host}:${entry.Port}` : "-"}
-                </span>
-              )}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 /** Tunnel latency, throughput and errors over time (was 监控 → 隧道). */
 function QualityView() {
@@ -175,6 +120,7 @@ function LinesView() {
       <RelayLatencyCell
         latency={l.latency}
         probing={probingIds.has(l.id)}
+        variant="summary"
         onProbe={() => probe([l.id])}
       />
     ) : null;
@@ -192,11 +138,17 @@ function LinesView() {
   if (loading) return <PageLoadingState message="正在加载..." />;
 
   const q = query.trim().toLowerCase();
-  const shown = inbounds.filter(
-    (i) =>
-      (!onlyWithRelays || (byInbound.get(i.id)?.length ?? 0) > 0) &&
-      (!q || i.name.toLowerCase().includes(q)),
-  );
+  const shown = inbounds
+    .filter(
+      (i) =>
+        (!onlyWithRelays || (byInbound.get(i.id)?.length ?? 0) > 0) &&
+        (!q || i.name.toLowerCase().includes(q)),
+    )
+    .sort(
+      (a, b) =>
+        Number((byInbound.get(b.id)?.length ?? 0) > 0) -
+        Number((byInbound.get(a.id)?.length ?? 0) > 0),
+    );
 
   return (
     <div className="space-y-3">
@@ -238,76 +190,18 @@ function LinesView() {
           }
         />
       ) : (
-        <div className={CARD_GRID}>
+        <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
           {shown.map((i) => {
             const lines = byInbound.get(i.id) ?? [];
-            const broken = lines.some(
-              (l) => !(l.forwardExists && l.forwardStatus === 1),
-            );
-            const landing = i.external ? "导入的节点" : i.nodeName;
-            const lineList = lines.length > 0 && (
-              <RelayLines lines={lines} renderLatency={latencyOf} />
-            );
 
             return (
-              <InfoCard
+              <RelayLandingCard
                 key={i.id}
-                actions={
-                  lines.length === 0
-                    ? [
-                        {
-                          key: "add",
-                          label: "添加中转",
-                          color: "primary",
-                          onPress: () => setEditing(i),
-                        },
-                      ]
-                    : undefined
-                }
-                badges={
-                  i.relayOnly && (
-                    <Chip size="sm" variant="flat">
-                      仅中转
-                    </Chip>
-                  )
-                }
-                headerRight={
-                  lines.length > 0 && (
-                    <Button
-                      className="h-7 min-w-0 px-2.5 text-xs"
-                      size="sm"
-                      variant="light"
-                      onPress={() => setEditing(i)}
-                    >
-                      管理
-                    </Button>
-                  )
-                }
-                rows={[]}
-                status={
-                  lines.length === 0
-                    ? "无中转"
-                    : broken
-                      ? "有暂停"
-                      : `${lines.length} 条中转`
-                }
-                title={i.name}
-                tone={
-                  lines.length === 0
-                    ? "default"
-                    : broken
-                      ? "warning"
-                      : "success"
-                }
-                onPress={() => setEditing(i)}
-              >
-                <div className="space-y-2">
-                  <p className="truncate text-xs text-default-500">
-                    落地：{landing}
-                  </p>
-                  {lineList}
-                </div>
-              </InfoCard>
+                inbound={i}
+                lines={lines}
+                renderLatency={latencyOf}
+                onManage={() => setEditing(i)}
+              />
             );
           })}
         </div>
