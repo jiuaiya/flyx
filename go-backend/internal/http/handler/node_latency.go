@@ -315,6 +315,11 @@ func latencyCommandError(err error) string {
 // probeNodeLatency measures the given local nodes' latency (all online ones
 // when ids is empty) to every enabled reference point and records it.
 func (h *Handler) probeNodeLatency(ctx context.Context, ids []int64) (map[int64]reachProbe, error) {
+	h.nodeLatencyProbeMu.Lock()
+	defer h.nodeLatencyProbeMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	nodes, err := h.repo.ListMonitorNodes()
 	if err != nil {
 		return nil, err
@@ -369,8 +374,8 @@ func (h *Handler) probeNodeLatency(ctx context.Context, ids []int64) (map[int64]
 	for nodeID, list := range points {
 		results[nodeID] = latencyProbe(list, now)
 	}
-	h.nodeLatency.replace(results, len(ids) == 0)
 	if ctx.Err() == nil {
+		h.nodeLatency.replace(results, len(ids) == 0)
 		h.recordLatencySamples(results)
 		// Streaks count scheduled rounds; a click's extra probe is not one.
 		if len(ids) == 0 {

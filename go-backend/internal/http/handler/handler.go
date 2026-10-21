@@ -44,11 +44,14 @@ type Handler struct {
 	passkeyMu      sync.Mutex
 	passkeyPending map[string]passkeyCeremony
 
-	jobsMu      sync.Mutex
-	jobsCancel  context.CancelFunc
-	jobsCtx     context.Context
-	jobsStarted bool
-	jobsWG      sync.WaitGroup
+	jobsMu              sync.Mutex
+	jobsCancel          context.CancelFunc
+	jobsCtx             context.Context
+	jobsStarted         bool
+	jobsWG              sync.WaitGroup
+	reconnectProbes     *nodeReconnectProbeQueue
+	nodeLatencyProbeMu  sync.Mutex
+	relayLatencyProbeMu sync.Mutex
 
 	upgradeMu                   sync.Mutex
 	systemUpgradeMu             sync.Mutex
