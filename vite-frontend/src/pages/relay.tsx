@@ -8,14 +8,12 @@ import { AnimatedPage } from "@/components/animated-page";
 import { PageLoadingState } from "@/components/page-state";
 import {
   EmptyHint,
-  ListRow,
   PageHeader,
   PageTabs,
   PageToolbar,
 } from "@/components/page-kit";
 import { CARD_GRID, InfoCard } from "@/components/info-card";
 import { RelayLatencyCell } from "@/components/relay-latency";
-import { ViewModeToggle, useViewMode } from "@/components/view-mode";
 import ForwardPage from "@/pages/forward";
 import { RelayModal } from "@/pages/inbound/relay-modal";
 import TunnelPage from "@/pages/tunnel";
@@ -103,16 +101,7 @@ function RelayLines({
 
 /** Tunnel latency, throughput and errors over time (was 监控 → 隧道). */
 function QualityView() {
-  const [viewMode, setViewMode] = useViewMode("monitor");
-
-  return (
-    <div className="space-y-3">
-      <div className="flex justify-end">
-        <ViewModeToggle value={viewMode} onChange={setViewMode} />
-      </div>
-      <TunnelMonitorView card={viewMode === "card"} />
-    </div>
-  );
+  return <TunnelMonitorView />;
 }
 
 /** Relay lines grouped by the landing they lead to. */
@@ -123,8 +112,7 @@ function LinesView() {
   const [editing, setEditing] = useState<InboundApiItem | null>(null);
   const [onlyWithRelays, setOnlyWithRelays] = useState(false);
   const [query, setQuery] = useState("");
-  const [viewMode, setViewMode] = useViewMode("relay");
-  const card = viewMode === "card";
+
   const [probingIds, setProbingIds] = useState<Set<number>>(new Set());
 
   const load = useCallback(async () => {
@@ -237,7 +225,6 @@ function LinesView() {
             测延迟
           </Button>
         )}
-        <ViewModeToggle value={viewMode} onChange={setViewMode} />
       </PageToolbar>
 
       {shown.length === 0 ? (
@@ -251,117 +238,76 @@ function LinesView() {
           }
         />
       ) : (
-        <div className={card ? CARD_GRID : "grid grid-cols-1 gap-2"}>
+        <div className={CARD_GRID}>
           {shown.map((i) => {
             const lines = byInbound.get(i.id) ?? [];
             const broken = lines.some(
               (l) => !(l.forwardExists && l.forwardStatus === 1),
             );
             const landing = i.external ? "导入的节点" : i.nodeName;
-            const summary =
-              lines.length === 0
-                ? `${landing} · 无中转，点击添加`
-                : `${landing} · ${lines.length} 条中转${broken ? " · 有暂停" : ""}`;
             const lineList = lines.length > 0 && (
               <RelayLines lines={lines} renderLatency={latencyOf} />
             );
 
-            if (card) {
-              return (
-                <InfoCard
-                  key={i.id}
-                  actions={
-                    lines.length === 0
-                      ? [
-                          {
-                            key: "add",
-                            label: "添加中转",
-                            color: "primary",
-                            onPress: () => setEditing(i),
-                          },
-                        ]
-                      : undefined
-                  }
-                  badges={
-                    i.relayOnly && (
-                      <Chip size="sm" variant="flat">
-                        仅中转
-                      </Chip>
-                    )
-                  }
-                  headerRight={
-                    lines.length > 0 && (
-                      <Button
-                        className="h-7 min-w-0 px-2.5 text-xs"
-                        size="sm"
-                        variant="light"
-                        onPress={() => setEditing(i)}
-                      >
-                        管理
-                      </Button>
-                    )
-                  }
-                  rows={[]}
-                  status={
-                    lines.length === 0
-                      ? "无中转"
-                      : broken
-                        ? "有暂停"
-                        : `${lines.length} 条中转`
-                  }
-                  title={i.name}
-                  tone={
-                    lines.length === 0
-                      ? "default"
-                      : broken
-                        ? "warning"
-                        : "success"
-                  }
-                  onPress={() => setEditing(i)}
-                >
-                  <div className="space-y-2">
-                    <p className="truncate text-xs text-default-500">
-                      落地：{landing}
-                    </p>
-                    {lineList}
-                  </div>
-                </InfoCard>
-              );
-            }
-
             return (
-              <ListRow
+              <InfoCard
                 key={i.id}
+                actions={
+                  lines.length === 0
+                    ? [
+                        {
+                          key: "add",
+                          label: "添加中转",
+                          color: "primary",
+                          onPress: () => setEditing(i),
+                        },
+                      ]
+                    : undefined
+                }
                 badges={
                   i.relayOnly && (
-                    <Chip className="shrink-0" size="sm" variant="flat">
+                    <Chip size="sm" variant="flat">
                       仅中转
                     </Chip>
                   )
                 }
-                footer={
-                  lineList && <div className="mt-2 lg:hidden">{lineList}</div>
-                }
-                meta={summary}
-                right={
-                  lineList && (
-                    // Wide screens: the lines sit beside the landing.
-                    <div className="hidden w-[30rem] lg:block xl:w-[38rem]">
-                      {lineList}
-                    </div>
+                headerRight={
+                  lines.length > 0 && (
+                    <Button
+                      className="h-7 min-w-0 px-2.5 text-xs"
+                      size="sm"
+                      variant="light"
+                      onPress={() => setEditing(i)}
+                    >
+                      管理
+                    </Button>
                   )
                 }
-                status={lines.length === 0 ? "off" : broken ? "warn" : "ok"}
-                statusTitle={
+                rows={[]}
+                status={
                   lines.length === 0
                     ? "无中转"
                     : broken
-                      ? "有中转转发已暂停或被删除"
-                      : "中转正常"
+                      ? "有暂停"
+                      : `${lines.length} 条中转`
                 }
                 title={i.name}
+                tone={
+                  lines.length === 0
+                    ? "default"
+                    : broken
+                      ? "warning"
+                      : "success"
+                }
                 onPress={() => setEditing(i)}
-              />
+              >
+                <div className="space-y-2">
+                  <p className="truncate text-xs text-default-500">
+                    落地：{landing}
+                  </p>
+                  {lineList}
+                </div>
+              </InfoCard>
             );
           })}
         </div>

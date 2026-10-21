@@ -219,6 +219,10 @@ func buildTrend(samples []model.NodeLatencySample, sinceMs, nowMs int64) []trend
 	if bucket < int64(reachProbeInterval/time.Millisecond) {
 		bucket = 1 // one sample per bucket
 	}
+	return buildTrendBuckets(samples, bucket)
+}
+
+func buildTrendBuckets(samples []model.NodeLatencySample, bucket int64) []trendPoint {
 	type acc struct {
 		sumMs, n, lossSum, count float64
 	}
