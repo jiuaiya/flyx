@@ -36,8 +36,6 @@ import { CARD_GRID, type CardTone, InfoCard } from "@/components/info-card";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { GroupHeader, groupItems, useCollapsed } from "@/pages/inbound/group";
 import { LatencyCell } from "@/components/latency-cell";
-import { RouteModal } from "@/components/route-modal";
-import { LatencyTrendModal } from "@/components/latency-trend-modal";
 import { ActionSheet } from "@/components/action-sheet";
 import { SplitModal } from "@/pages/inbound/split-modal";
 import {
@@ -247,14 +245,6 @@ export default function InboundPage() {
   const [batchToggling, setBatchToggling] = useState(false);
   const [probing, setProbing] = useState(false);
   const [probingIds, setProbingIds] = useState<Set<number>>(new Set());
-  const [routeNode, setRouteNode] = useState<{
-    id: number;
-    name: string;
-  } | null>(null);
-  const [trendNode, setTrendNode] = useState<{
-    id: number;
-    name: string;
-  } | null>(null);
   const [sources, setSources] = useState<RemoteSourceItem[]>([]);
 
   const loadData = useCallback(
@@ -1287,16 +1277,6 @@ export default function InboundPage() {
           }}
         </ModalContent>
       </Modal>
-      <RouteModal
-        nodeId={routeNode?.id ?? null}
-        nodeName={routeNode?.name}
-        onClose={() => setRouteNode(null)}
-      />
-      <LatencyTrendModal
-        nodeId={trendNode?.id ?? null}
-        nodeName={trendNode?.name}
-        onClose={() => setTrendNode(null)}
-      />
     </AnimatedPage>
   );
 }
