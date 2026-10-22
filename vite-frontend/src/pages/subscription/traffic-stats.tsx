@@ -1,6 +1,7 @@
 import type { SubTraffic, SubTrafficRange } from "@/api";
 
 import { useEffect, useState } from "react";
+import { ArrowDown, ArrowUp } from "lucide-react";
 import {
   Area,
   ComposedChart,
@@ -17,6 +18,8 @@ import { Segmented } from "@/pages/subscription/controls";
 
 const DOWN = "#2563eb";
 const UP = "#ea580c";
+const DOWN_TEXT = "text-blue-700 dark:text-blue-400";
+const UP_TEXT = "text-orange-700 dark:text-orange-400";
 
 const RANGES: Array<[SubTrafficRange, string]> = [
   ["hour", "小时"],
@@ -136,11 +139,11 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
       <div className="grid grid-cols-3 gap-2">
         {(
           [
-            ["下载", shown?.down, DOWN],
-            ["上传", shown?.up, UP],
-            ["合计", shown ? shown.up + shown.down : undefined, ""],
-          ] as Array<[string, number | undefined, string]>
-        ).map(([label, value, color]) => (
+            ["下载", shown?.down, DOWN, DOWN_TEXT],
+            ["上传", shown?.up, UP, UP_TEXT],
+            ["合计", shown ? shown.up + shown.down : undefined, "", ""],
+          ] as Array<[string, number | undefined, string, string]>
+        ).map(([label, value, color, textColor]) => (
           <div key={label} className="rounded-xl bg-default-100 px-3 py-2">
             <div className="flex items-center gap-1.5 text-xs text-default-500">
               {color && (
@@ -151,7 +154,9 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
               )}
               {label}
             </div>
-            <div className="mt-0.5 truncate font-mono text-sm font-semibold">
+            <div
+              className={`mt-0.5 truncate font-mono text-sm font-semibold ${textColor}`}
+            >
               {value === undefined ? "…" : bytes(value)}
             </div>
           </div>
@@ -200,10 +205,10 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
                     return (
                       <div className="rounded-xl border border-divider bg-content1 px-3 py-2 text-xs shadow-lg">
                         <p className="font-medium">{p.long}</p>
-                        <p className="mt-1" style={{ color: DOWN }}>
+                        <p className={`mt-1 ${DOWN_TEXT}`}>
                           下载 {bytes(p.down)}
                         </p>
-                        <p style={{ color: UP }}>上传 {bytes(p.up)}</p>
+                        <p className={UP_TEXT}>上传 {bytes(p.up)}</p>
                       </div>
                     );
                   }}
@@ -278,17 +283,50 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
               >
                 <span className="truncate text-xs">{p.row}</span>
                 <div className="min-w-0 space-y-1">
-                  <div className="h-1.5 overflow-hidden rounded-full bg-default-100">
+                  <div
+                    aria-hidden="true"
+                    className="flex h-1.5 overflow-hidden rounded-full bg-default-100"
+                  >
                     <div
-                      className="h-full rounded-full"
+                      className="h-full shrink-0"
                       style={{
                         background: DOWN,
-                        width: `${((p.up + p.down) / maxTotal) * 100}%`,
+                        width: `${(p.down / maxTotal) * 100}%`,
+                      }}
+                    />
+                    <div
+                      className="h-full shrink-0"
+                      style={{
+                        background: UP,
+                        width: `${(p.up / maxTotal) * 100}%`,
                       }}
                     />
                   </div>
-                  <div className="truncate font-mono text-[11px] text-default-500">
-                    {bytes(p.down)} / {bytes(p.up)}
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium tabular-nums">
+                    <span
+                      className={`inline-flex items-center gap-1 ${DOWN_TEXT}`}
+                    >
+                      <ArrowDown
+                        aria-hidden="true"
+                        className="h-3 w-3 shrink-0"
+                      />
+                      <span>下载</span>
+                      <span className="whitespace-nowrap font-mono">
+                        {bytes(p.down)}
+                      </span>
+                    </span>
+                    <span
+                      className={`inline-flex items-center gap-1 ${UP_TEXT}`}
+                    >
+                      <ArrowUp
+                        aria-hidden="true"
+                        className="h-3 w-3 shrink-0"
+                      />
+                      <span>上传</span>
+                      <span className="whitespace-nowrap font-mono">
+                        {bytes(p.up)}
+                      </span>
+                    </span>
                   </div>
                 </div>
                 <span className="text-right font-mono text-xs font-semibold">
