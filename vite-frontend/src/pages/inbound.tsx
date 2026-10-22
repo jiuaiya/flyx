@@ -37,8 +37,6 @@ import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
 import { GroupHeader, groupItems, useCollapsed } from "@/pages/inbound/group";
 import { LatencyCell } from "@/components/latency-cell";
-import { RouteModal } from "@/components/route-modal";
-import { LatencyTrendModal } from "@/components/latency-trend-modal";
 import { ActionSheet } from "@/components/action-sheet";
 import { SplitModal } from "@/pages/inbound/split-modal";
 import {
@@ -249,14 +247,6 @@ export default function InboundPage() {
   const [batchToggling, setBatchToggling] = useState(false);
   const [probing, setProbing] = useState(false);
   const [probingIds, setProbingIds] = useState<Set<number>>(new Set());
-  const [routeNode, setRouteNode] = useState<{
-    id: number;
-    name: string;
-  } | null>(null);
-  const [trendNode, setTrendNode] = useState<{
-    id: number;
-    name: string;
-  } | null>(null);
   const [sources, setSources] = useState<RemoteSourceItem[]>([]);
   const loadingRef = useRef(false);
   const reloadPendingRef = useRef(false);
@@ -599,24 +589,15 @@ export default function InboundPage() {
     const running = item.enabled && !kernelBad && !unreachable;
 
     const selected = selectMode && selectedIds.has(item.id);
+    // Built inbounds show their node's latency and routes on the 节点
+    // page; only imported nodes, which have no node here, measure their own.
     const latency =
-      item.enabled && !kernelBad && item.probe?.skipped !== true ? (
+      item.external && item.enabled && item.probe?.skipped !== true ? (
         <LatencyCell
           probe={probe}
           probing={probingIds.has(item.id)}
           variant="card"
           onProbe={() => probeOne(item.id)}
-          onShowRoute={
-            // Points come from the node, so its routes apply.
-            !item.external && probe?.points?.length
-              ? () => setRouteNode({ id: item.nodeId, name: item.nodeName })
-              : undefined
-          }
-          onShowTrend={
-            !item.external && probe?.points?.length
-              ? () => setTrendNode({ id: item.nodeId, name: item.nodeName })
-              : undefined
-          }
         />
       ) : null;
     // Cards give measured points their own block under the rows.
@@ -752,6 +733,9 @@ export default function InboundPage() {
           ...(latency && !latencyTiles
             ? ([["延迟", latency]] as Array<[string, React.ReactNode]>)
             : []),
+          ...(!item.external && unreachable && probe?.error
+            ? ([["检测", probe.error]] as Array<[string, React.ReactNode]>)
+            : []),
         ]}
         selectMode={selectMode}
         selected={selected}
@@ -759,7 +743,9 @@ export default function InboundPage() {
           unreachable
             ? "连不上"
             : running
-              ? "运行中"
+              ? !item.external && probe
+                ? "可连接"
+                : "运行中"
               : item.enabled
                 ? "异常"
                 : "已停用"
@@ -1323,16 +1309,6 @@ export default function InboundPage() {
           }}
         </ModalContent>
       </Modal>
-      <RouteModal
-        nodeId={routeNode?.id ?? null}
-        nodeName={routeNode?.name}
-        onClose={() => setRouteNode(null)}
-      />
-      <LatencyTrendModal
-        nodeId={trendNode?.id ?? null}
-        nodeName={trendNode?.name}
-        onClose={() => setTrendNode(null)}
-      />
     </AnimatedPage>
   );
 }
