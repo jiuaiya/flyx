@@ -17,7 +17,6 @@ import ForwardPage from "@/pages/forward";
 import { RelayModal } from "@/pages/inbound/relay-modal";
 import TunnelPage from "@/pages/tunnel";
 import { TunnelMonitorView } from "@/pages/node/tunnel-monitor-view";
-import { ViewModeToggle, useViewMode } from "@/components/view-mode";
 import { RelayLandingCard } from "@/pages/relay/relay-landing-card";
 import { Button } from "@/shadcn-bridge/heroui/button";
 
@@ -47,16 +46,7 @@ const TABS: Array<{ key: RelayTab; label: string }> = [
 
 /** Tunnel latency, throughput and errors over time (was 监控 → 隧道). */
 function QualityView() {
-  const [viewMode, setViewMode] = useViewMode("monitor");
-
-  return (
-    <div className="space-y-3">
-      <div className="flex justify-end">
-        <ViewModeToggle value={viewMode} onChange={setViewMode} />
-      </div>
-      <TunnelMonitorView card={viewMode === "card"} />
-    </div>
-  );
+  return <TunnelMonitorView />;
 }
 
 /** Relay lines grouped by the landing they lead to. */
