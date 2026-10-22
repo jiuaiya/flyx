@@ -95,7 +95,9 @@ export async function saveChartImage(container: HTMLElement, filename: string) {
     let x = 20;
     let y = 48;
     const legend = [
-      ...container.querySelectorAll(".recharts-legend-item-text"),
+      ...container.querySelectorAll(
+        "[data-chart-legend], .recharts-legend-item-text",
+      ),
     ].map((element) => {
       const text = element.textContent ?? "";
       const width = context.measureText(text).width + 24;
@@ -104,9 +106,11 @@ export async function saveChartImage(container: HTMLElement, filename: string) {
         x = 20;
         y += 20;
       }
-      const marker = element
-        .closest(".recharts-legend-item")
-        ?.querySelector(".recharts-legend-icon");
+      const marker = element.matches("[data-chart-legend]")
+        ? element.querySelector("[data-chart-legend-marker]")
+        : element
+            .closest(".recharts-legend-item")
+            ?.querySelector(".recharts-legend-icon");
       const markerStyle = marker ? getComputedStyle(marker) : null;
       const color = markerStyle
         ? markerStyle.stroke !== "none"

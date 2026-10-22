@@ -1,9 +1,17 @@
 import type { NodeQualityData, NodeQualityStats } from "@/api/types";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Activity,
   ArrowDownUp,
+  ArrowLeftRight,
   CheckCircle2,
   ChartLine,
   Clock3,
@@ -17,7 +25,6 @@ import {
 } from "lucide-react";
 import {
   CartesianGrid,
-  Legend,
   Line,
   LineChart,
   ReferenceArea,
@@ -69,8 +76,6 @@ const statLabel = (
   key: keyof NodeQualityStats,
 ) => numberLabel(s?.[key]);
 
-type QualityLegendEntry = { value?: string; inactive?: boolean };
-
 function QualityTooltip({
   active,
   payload,
@@ -93,7 +98,7 @@ function QualityTooltip({
   if (!active || !visiblePayload?.length || label == null) return null;
 
   return (
-    <div className="min-w-48 rounded-xl border border-divider bg-content1 p-3 text-xs shadow-xl">
+    <div className="min-w-48 max-w-[calc(100vw-4rem)] rounded-xl border border-divider bg-content1 p-3 text-xs shadow-xl">
       <p className="mb-2 text-default-500">{analyticsDate(label)}</p>
       {visiblePayload.map((p) => {
         const loss = p.payload[`${p.dataKey}loss`];
@@ -101,16 +106,16 @@ function QualityTooltip({
         return (
           <div
             key={p.dataKey}
-            className="mt-1.5 flex items-center justify-between gap-5"
+            className="mt-1.5 flex items-center justify-between gap-3"
           >
-            <span className="flex items-center gap-1.5">
+            <span className="flex min-w-0 items-center gap-1.5 break-words">
               <span
-                className="h-2 w-2 rounded-full"
+                className="h-2 w-2 shrink-0 rounded-full"
                 style={{ background: p.color }}
               />
               {p.name}
             </span>
-            <span className="font-mono">
+            <span className="shrink-0 font-mono">
               {p.value == null
                 ? loss == null
                   ? "未采集"
@@ -157,7 +162,21 @@ export function NodeNetworkQuality({
   const [data, setData] = useState<NodeQualityData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tooltipPortal, setTooltipPortal] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const [compactChart, setCompactChart] = useState(
+    () => window.matchMedia("(max-width: 639px)").matches,
+  );
   const chart = useRef<HTMLDivElement>(null);
+  const chartViewport = useRef<HTMLDivElement>(null);
+  const chartScrollLeft = useRef<number | null>(null);
+  const chartPan = useRef<{
+    pointerId: number;
+    x: number;
+    left: number;
+  } | null>(null);
+  const chartScrollHint = useId();
   const drag = useRef<number | null>(null);
   const graph = useRef<HTMLDivElement>(null);
   const worstNames = useMemo(
@@ -176,6 +195,15 @@ export function NodeNetworkQuality({
   const targetsKey = JSON.stringify(targets);
 
   useEffect(() => setHiddenLines([]), [nodeId]);
+
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 639px)");
+    const update = () => setCompactChart(query.matches);
+
+    query.addEventListener("change", update);
+
+    return () => query.removeEventListener("change", update);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -219,6 +247,16 @@ export function NodeNetworkQuality({
 
     return () => window.clearInterval(timer);
   }, []);
+
+  // Refreshing replaces the chart while loading; keep the user's position.
+  // A new range starts at the latest samples on narrow screens.
+  useLayoutEffect(() => {
+    const viewport = chartViewport.current;
+
+    if (viewport) {
+      viewport.scrollLeft = chartScrollLeft.current ?? viewport.scrollWidth;
+    }
+  }, [data, loading, compactChart, zoom]);
 
   const shown = (data?.points ?? []).flatMap((point, index) =>
     !targets.length || targets.includes(point.name)
@@ -266,14 +304,41 @@ export function NodeNetworkQuality({
   const yAxis = latencyChartScale(
     plotted.flatMap((row) => visible.map(({ index }) => row[`s${index}`])),
   );
+  const yAxisProps = {
+    allowDataOverflow: true,
+    axisLine: false,
+    domain: [0, yAxis.max],
+    interval: 0,
+    stroke: "var(--default-500)",
+    tick: { fontSize: 11 },
+    tickFormatter: (value: number) => `${value} ms`,
+    tickLine: false,
+    ticks: yAxis.ticks,
+    width: 64,
+  };
   const summary = data?.summary;
   const rangeLabel = ranges.find(([h]) => h === hours)?.[1];
   const refresh = () => setRevision((v) => v + 1);
+  const toggleLine = (name: string) => {
+    setHiddenLines((current) =>
+      current.includes(name)
+        ? current.filter((line) => line !== name)
+        : [...current, name],
+    );
+  };
   const resetZoom = () => {
+    chartScrollLeft.current = null;
     setZoom(null);
     setFocus(null);
     setSelection(null);
     drag.current = null;
+  };
+  const centerChartViewport = () => {
+    const viewport = chartViewport.current;
+
+    if (viewport)
+      chartScrollLeft.current =
+        (viewport.scrollWidth - viewport.clientWidth) / 2;
   };
   const chooseTarget = (name: string) => {
     setSelected((current) =>
@@ -292,6 +357,7 @@ export function NodeNetworkQuality({
       selection &&
       Math.abs(selection[1] - selection[0]) >= (data?.intervalMs ?? 1)
     ) {
+      centerChartViewport();
       setZoom([Math.min(...selection), Math.max(...selection)]);
       setFocus(null);
     }
@@ -493,14 +559,14 @@ export function NodeNetworkQuality({
               className="min-w-0 overflow-hidden rounded-2xl border border-divider bg-content1"
             >
               <div className="flex flex-wrap items-center gap-2 border-b border-divider px-4 py-3">
-                <h3 className="mr-auto flex min-w-0 items-center gap-2 text-sm font-semibold">
+                <h3 className="flex w-full min-w-0 items-center gap-2 text-sm font-semibold sm:mr-auto sm:w-auto sm:flex-1">
                   <ChartLine
                     aria-hidden="true"
                     className="h-4 w-4 shrink-0 text-default-500"
                   />
                   趋势
                   <span
-                    className="ml-1 text-xs font-normal text-default-500"
+                    className="ml-1 min-w-0 truncate text-xs font-normal text-default-500"
                     title={selected.join("、")}
                   >
                     当前：
@@ -541,13 +607,16 @@ export function NodeNetworkQuality({
                 </button>
                 <div
                   aria-label="网络质量时间范围"
-                  className="flex items-center gap-1"
+                  className="grid w-full min-w-0 grid-cols-5 gap-1 sm:flex sm:w-auto sm:items-center"
                 >
                   {ranges.map(([value, label]) => (
                     <button
                       key={value}
                       aria-pressed={hours === value}
-                      className={analyticsButton(hours === value)}
+                      className={cn(
+                        analyticsButton(hours === value),
+                        "min-w-0 px-0 sm:px-3",
+                      )}
                       type="button"
                       onClick={() => {
                         setHours(value);
@@ -650,147 +719,254 @@ export function NodeNetworkQuality({
                   <Download aria-hidden="true" className="h-4 w-4" />
                 </button>
               </div>
-              <div
-                ref={chart}
-                aria-label="网络质量延迟趋势图"
-                className={`${trendOnly ? "h-[280px] sm:h-[320px]" : "h-[340px] sm:h-[400px]"} bg-content1 px-1 py-4 text-foreground sm:px-3 ${zoomMode ? "cursor-crosshair select-none" : ""}`}
-              >
-                <ResponsiveContainer
-                  height="100%"
-                  initialDimension={{ width: 600, height: 340 }}
-                  minHeight={0}
-                  minWidth={0}
-                  width="100%"
+              <div ref={chart} className="bg-content1 text-foreground">
+                <div
+                  aria-label="趋势图图例"
+                  className="grid grid-cols-2 gap-x-3 gap-y-1 px-4 pb-1 pt-4 sm:flex sm:flex-wrap sm:justify-center sm:gap-x-4 sm:px-6"
+                  role="group"
                 >
-                  <LineChart
-                    accessibilityLayer
-                    data={plotted}
-                    margin={{ top: 16, right: 16, bottom: 12, left: 4 }}
-                    onMouseDown={(e: { activeLabel?: number | string }) => {
-                      const t = Number(e?.activeLabel);
+                  {shown.map(({ point, color }) => {
+                    const hidden = hiddenLines.includes(point.name);
 
-                      if (zoomMode && Number.isFinite(t)) {
-                        drag.current = t;
-                        setSelection([t, t]);
-                      }
-                    }}
-                    onMouseMove={(e: { activeLabel?: number | string }) => {
-                      const t = Number(e?.activeLabel);
-
-                      if (drag.current != null && Number.isFinite(t))
-                        setSelection([drag.current, t]);
-                    }}
-                    onMouseUp={finishZoom}
-                  >
-                    <CartesianGrid
-                      stroke="var(--divider)"
-                      strokeDasharray="0"
-                      vertical={false}
-                    />
-                    <XAxis
-                      allowDataOverflow
-                      axisLine={{ stroke: "var(--divider)" }}
-                      dataKey="t"
-                      domain={zoom ?? [data.since, data.until]}
-                      minTickGap={30}
-                      stroke="var(--default-500)"
-                      tick={{ fontSize: 11 }}
-                      tickFormatter={(t: number) =>
-                        analyticsDate(t, hours >= 168)
-                      }
-                      tickLine={false}
-                      type="number"
-                    />
-                    <YAxis
-                      allowDataOverflow
-                      axisLine={false}
-                      domain={[0, yAxis.max]}
-                      interval={0}
-                      stroke="var(--default-500)"
-                      tick={{ fontSize: 11 }}
-                      tickFormatter={(value: number) => `${value} ms`}
-                      tickLine={false}
-                      ticks={yAxis.ticks}
-                      width={64}
-                    />
-                    <Tooltip
-                      content={<QualityTooltip />}
-                      filterNull={false}
-                      includeHidden={false}
-                    />
-                    <Legend
-                      formatter={(value: string, entry: QualityLegendEntry) => (
-                        <button
-                          aria-label={`${value}曲线`}
-                          aria-pressed={!entry.inactive}
-                          className={cn(
-                            "min-h-6 rounded-sm px-0.5 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-                            entry.inactive
-                              ? "text-default-400"
-                              : "text-foreground",
-                          )}
-                          title={`${entry.inactive ? "显示" : "隐藏"} ${value}`}
-                          type="button"
-                        >
-                          {value}
-                        </button>
-                      )}
-                      iconSize={20}
-                      iconType="line"
-                      inactiveColor="var(--default-400)"
-                      itemSorter={null}
-                      verticalAlign="top"
-                      wrapperStyle={{ paddingBottom: 28, fontSize: 12 }}
-                      onClick={({ value }: QualityLegendEntry) => {
-                        if (value == null) return;
-                        setHiddenLines((current) =>
-                          current.includes(value)
-                            ? current.filter((name) => name !== value)
-                            : [...current, value],
-                        );
-                      }}
-                    />
-                    {shown.map(({ point, index, color }) => (
-                      <Line
+                    return (
+                      <button
                         key={point.name}
-                        activeDot={{ r: 4 }}
-                        connectNulls={connect}
-                        dataKey={`s${index}`}
-                        dot={false}
-                        hide={hiddenLines.includes(point.name)}
-                        isAnimationActive={false}
-                        name={point.name}
-                        stroke={color}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={1.5}
-                        type="monotoneX"
-                      />
-                    ))}
-                    {selection && (
-                      <ReferenceArea
-                        fill="var(--primary)"
-                        fillOpacity={0.12}
-                        stroke="var(--primary)"
-                        x1={Math.min(...selection)}
-                        x2={Math.max(...selection)}
-                      />
+                        aria-label={`${point.name}曲线`}
+                        aria-pressed={!hidden}
+                        className={cn(
+                          "flex min-h-8 min-w-0 items-center gap-1.5 rounded-md px-1 py-1 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                          hidden ? "text-default-400" : "text-foreground",
+                        )}
+                        data-chart-legend=""
+                        title={`${hidden ? "显示" : "隐藏"} ${point.name}`}
+                        type="button"
+                        onClick={() => toggleLine(point.name)}
+                      >
+                        <ChartLine
+                          aria-hidden="true"
+                          className="h-4 w-4 shrink-0"
+                          data-chart-legend-marker=""
+                          style={{
+                            color: hidden ? "var(--default-400)" : color,
+                          }}
+                        />
+                        <span className="min-w-0 break-words leading-4">
+                          {point.name}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div
+                  className="flex items-center gap-1.5 px-4 pt-2 text-[11px] text-default-500 sm:hidden"
+                  id={chartScrollHint}
+                >
+                  <ArrowLeftRight
+                    aria-hidden="true"
+                    className="h-3.5 w-3.5 shrink-0"
+                  />
+                  左右滑动查看曲线，默认显示最新时段
+                </div>
+                <div className="relative">
+                  <div
+                    ref={chartViewport}
+                    aria-describedby={chartScrollHint}
+                    aria-label="延迟趋势图，可左右滑动"
+                    className={cn(
+                      "overflow-x-auto overscroll-x-contain [scrollbar-width:thin] focus-visible:outline-none focus-within:ring-2 focus-within:ring-inset focus-within:ring-primary",
+                      zoomMode
+                        ? "cursor-crosshair"
+                        : "cursor-grab active:cursor-grabbing sm:cursor-auto",
                     )}
-                    {focus != null && (
-                      <ReferenceLine
-                        label={{
-                          value: "异常时间",
-                          position: "insideTopRight",
-                          fill: "var(--warning)",
-                          fontSize: 11,
-                        }}
-                        stroke="var(--warning)"
-                        strokeDasharray="4 4"
-                        x={focus}
-                      />
-                    )}
-                  </LineChart>
-                </ResponsiveContainer>
+                    role="region"
+                    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Focus enables keyboard scrolling of the chart viewport.
+                    tabIndex={0}
+                    onPointerCancel={() => {
+                      chartPan.current = null;
+                    }}
+                    onPointerDown={(event) => {
+                      const viewport = event.currentTarget;
+
+                      if (
+                        !zoomMode &&
+                        event.pointerType === "mouse" &&
+                        event.button === 0 &&
+                        viewport.scrollWidth > viewport.clientWidth
+                      ) {
+                        chartPan.current = {
+                          pointerId: event.pointerId,
+                          x: event.clientX,
+                          left: viewport.scrollLeft,
+                        };
+                      }
+                    }}
+                    onPointerMove={(event) => {
+                      const pan = chartPan.current;
+
+                      if (
+                        !pan ||
+                        pan.pointerId !== event.pointerId ||
+                        Math.abs(event.clientX - pan.x) < 4
+                      )
+                        return;
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                      event.preventDefault();
+                      event.currentTarget.scrollLeft =
+                        pan.left - (event.clientX - pan.x);
+                    }}
+                    onPointerUp={(event) => {
+                      chartPan.current = null;
+                      if (
+                        event.currentTarget.hasPointerCapture(event.pointerId)
+                      )
+                        event.currentTarget.releasePointerCapture(
+                          event.pointerId,
+                        );
+                    }}
+                    onScroll={(event) => {
+                      chartScrollLeft.current = event.currentTarget.scrollLeft;
+                    }}
+                  >
+                    <div
+                      aria-label="网络质量延迟趋势图"
+                      className={`${trendOnly ? "h-[280px]" : "h-[320px] sm:h-[360px]"} min-w-[720px] px-1 pb-4 pt-1 sm:min-w-0 sm:px-3 ${zoomMode ? "cursor-crosshair select-none" : ""}`}
+                    >
+                      <ResponsiveContainer
+                        height="100%"
+                        initialDimension={{ width: 600, height: 340 }}
+                        minHeight={0}
+                        minWidth={0}
+                        width="100%"
+                      >
+                        <LineChart
+                          accessibilityLayer
+                          className="[&>svg]:outline-none"
+                          data={plotted}
+                          margin={{ top: 16, right: 24, bottom: 12, left: 4 }}
+                          onMouseDown={(e: {
+                            activeLabel?: number | string;
+                          }) => {
+                            const t = Number(e?.activeLabel);
+
+                            if (zoomMode && Number.isFinite(t)) {
+                              drag.current = t;
+                              setSelection([t, t]);
+                            }
+                          }}
+                          onMouseMove={(e: {
+                            activeLabel?: number | string;
+                          }) => {
+                            const t = Number(e?.activeLabel);
+
+                            if (drag.current != null && Number.isFinite(t))
+                              setSelection([drag.current, t]);
+                          }}
+                          onMouseUp={finishZoom}
+                        >
+                          <CartesianGrid
+                            stroke="var(--divider)"
+                            strokeDasharray="0"
+                            vertical={false}
+                          />
+                          <XAxis
+                            allowDataOverflow
+                            axisLine={{ stroke: "var(--divider)" }}
+                            dataKey="t"
+                            domain={zoom ?? [data.since, data.until]}
+                            interval="preserveStartEnd"
+                            minTickGap={30}
+                            stroke="var(--default-500)"
+                            tick={{ fontSize: 11 }}
+                            tickFormatter={(t: number) =>
+                              analyticsDate(t, hours >= 168)
+                            }
+                            tickLine={false}
+                            type="number"
+                          />
+                          <YAxis {...yAxisProps} />
+                          <Tooltip
+                            content={<QualityTooltip />}
+                            filterNull={false}
+                            includeHidden={false}
+                            portal={compactChart ? tooltipPortal : undefined}
+                            wrapperStyle={
+                              compactChart
+                                ? {
+                                    position: "absolute",
+                                    top: 12,
+                                    right: 8,
+                                    zIndex: 20,
+                                    pointerEvents: "none",
+                                  }
+                                : undefined
+                            }
+                          />
+                          {shown.map(({ point, index, color }) => (
+                            <Line
+                              key={point.name}
+                              activeDot={{ r: 4 }}
+                              connectNulls={connect}
+                              dataKey={`s${index}`}
+                              dot={false}
+                              hide={hiddenLines.includes(point.name)}
+                              isAnimationActive={false}
+                              name={point.name}
+                              stroke={color}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={1.5}
+                              type="monotoneX"
+                            />
+                          ))}
+                          {selection && (
+                            <ReferenceArea
+                              fill="var(--primary)"
+                              fillOpacity={0.12}
+                              stroke="var(--primary)"
+                              x1={Math.min(...selection)}
+                              x2={Math.max(...selection)}
+                            />
+                          )}
+                          {focus != null && (
+                            <ReferenceLine
+                              label={{
+                                value: "异常时间",
+                                position: "insideTopRight",
+                                fill: "var(--warning)",
+                                fontSize: 11,
+                              }}
+                              stroke="var(--warning)"
+                              strokeDasharray="4 4"
+                              x={focus}
+                            />
+                          )}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                  <div
+                    aria-hidden="true"
+                    className={`${trendOnly ? "h-[280px]" : "h-[320px]"} pointer-events-none absolute left-0 top-0 z-10 w-[72px] overflow-hidden bg-content1 px-1 pb-4 pt-1 sm:hidden`}
+                  >
+                    <ResponsiveContainer
+                      height="100%"
+                      initialDimension={{ width: 96, height: 260 }}
+                      width={96}
+                    >
+                      <LineChart
+                        data={[{ t: 0 }]}
+                        margin={{ top: 16, right: 24, bottom: 42, left: 4 }}
+                      >
+                        <XAxis hide dataKey="t" domain={[0, 1]} type="number" />
+                        <YAxis {...yAxisProps} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div
+                    ref={setTooltipPortal}
+                    className="pointer-events-none absolute inset-0 z-20 sm:hidden"
+                  />
+                </div>
               </div>
               <p className="border-t border-divider px-4 py-3 text-[11px] text-default-500">
                 每 {Math.round(data.probeIntervalMs / 60000)} 分钟采集一次 ·
@@ -837,13 +1013,14 @@ export function NodeNetworkQuality({
               {data.events.map((event) => (
                 <button
                   key={event.kind}
-                  className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left text-xs hover:bg-default-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+                  className="flex w-full flex-col items-start gap-2 px-5 py-4 text-left text-xs hover:bg-default-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:flex-row sm:items-center sm:justify-between sm:gap-4"
                   type="button"
                   onClick={() => {
                     setHiddenLines((current) =>
                       current.filter((name) => name !== event.name),
                     );
                     setFocus(event.t);
+                    centerChartViewport();
                     const window = Math.max(
                       data.intervalMs * 4,
                       Math.min((hours * 3600000) / 6, 3600000),
@@ -881,7 +1058,7 @@ export function NodeNetworkQuality({
                         )}
                     </span>
                   </span>
-                  <span className="shrink-0 text-default-500">
+                  <span className="shrink-0 self-end text-default-500 sm:self-auto">
                     {analyticsDate(event.t)}
                   </span>
                 </button>
