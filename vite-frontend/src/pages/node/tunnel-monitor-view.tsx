@@ -47,12 +47,7 @@ import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
 import { Select, SelectItem } from "@/shadcn-bridge/heroui/select";
-import {
-  EmptyHint,
-  ListGroup,
-  ListRow,
-  type RowStatus,
-} from "@/components/page-kit";
+import { EmptyHint } from "@/components/page-kit";
 import {
   DEFAULT_TUNNEL_QUALITY_INTERVAL_SEC,
   parseTunnelQualityIntervalSeconds,
@@ -309,7 +304,7 @@ const QualityChartCard = React.memo(function QualityChartCard({
                 <Tooltip
                   contentStyle={{
                     backgroundColor: "rgba(0,0,0,0.85)",
-                    border: "none",
+                    border: "1px solid var(--divider)",
                     borderRadius: "8px",
                     fontSize: 12,
                   }}
@@ -326,7 +321,7 @@ const QualityChartCard = React.memo(function QualityChartCard({
 
                     return [`${n.toFixed(1)}ms`, label];
                   }}
-                  labelStyle={{ color: "#fff" }}
+                  labelStyle={{ color: "var(--foreground)" }}
                 />
                 <Line
                   connectNulls
@@ -427,12 +422,12 @@ const TrafficChartCard = React.memo(function TrafficChartCard({
                 <Tooltip
                   contentStyle={{
                     backgroundColor: "rgba(0,0,0,0.85)",
-                    border: "none",
+                    border: "1px solid var(--divider)",
                     borderRadius: "8px",
                     fontSize: 12,
                   }}
                   formatter={yFormatter}
-                  labelStyle={{ color: "#fff" }}
+                  labelStyle={{ color: "var(--foreground)" }}
                 />
                 <Line
                   dataKey="bytesIn"
@@ -733,7 +728,7 @@ const ForwardingChainTopology = React.memo(function ForwardingChainTopology({
   );
 });
 
-export function TunnelMonitorView({ card }: { card?: boolean } = {}) {
+export function TunnelMonitorView() {
   const [tunnels, setTunnels] = useState<MonitorTunnelApiItem[]>([]);
   const [tunnelsLoading, setTunnelsLoading] = useState(false);
   const [tunnelsError, setTunnelsError] = useState<string | null>(null);
@@ -1317,10 +1312,7 @@ export function TunnelMonitorView({ card }: { card?: boolean } = {}) {
     );
   }
 
-  const latencyText = (v?: number) =>
-    v === undefined || v < 0 ? "-" : `${v.toFixed(0)}ms`;
-
-  // ===== LIST VIEW =====
+  // ===== TUNNEL CARDS =====
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
@@ -1366,7 +1358,7 @@ export function TunnelMonitorView({ card }: { card?: boolean } = {}) {
 
       {tunnels.length === 0 ? (
         !tunnelsError && <EmptyHint text="暂无隧道" />
-      ) : card ? (
+      ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {tunnels.map((tunnel) => {
             const quality = qualityMap[tunnel.id];
@@ -1472,76 +1464,6 @@ export function TunnelMonitorView({ card }: { card?: boolean } = {}) {
             );
           })}
         </div>
-      ) : (
-        <ListGroup>
-          {tunnels.map((tunnel) => {
-            const quality = qualityMap[tunnel.id];
-            const isEnabled = tunnel.status === 1;
-            const targetLabel = probeTargetLabel(quality);
-            const status: RowStatus = !isEnabled
-              ? "off"
-              : !quality
-                ? "off"
-                : quality.errorMessage ||
-                    quality.entryToExitLatency < 0 ||
-                    quality.exitToBingLatency < 0
-                  ? "bad"
-                  : quality.entryToExitLoss > 0 ||
-                      quality.exitToBingLoss > 0 ||
-                      quality.entryToExitLatency > 200 ||
-                      quality.exitToBingLatency > 200
-                    ? "warn"
-                    : "ok";
-            const meta = !quality
-              ? monitorTunnelQualityEnabled
-                ? "等待探测"
-                : "实时检测已关闭"
-              : quality.errorMessage
-                ? quality.errorMessage
-                : [
-                    `入口→出口 ${latencyText(quality.entryToExitLatency)}`,
-                    `出口→目标 ${latencyText(quality.exitToBingLatency)}`,
-                    quality.timestamp
-                      ? `更新 ${new Date(quality.timestamp).toLocaleTimeString("zh-CN")}`
-                      : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" · ");
-
-            return (
-              <ListRow
-                key={tunnel.id}
-                badges={
-                  !isEnabled && (
-                    <Chip className="shrink-0" size="sm" variant="flat">
-                      禁用
-                    </Chip>
-                  )
-                }
-                meta={meta}
-                right={
-                  <div
-                    aria-label={`出口到测试目标 ${targetLabel}`}
-                    className="hidden gap-4 lg:flex"
-                  >
-                    <UptimeHistoryBar
-                      history={qualityHistoryMap[tunnel.id]}
-                      type="entryToExit"
-                    />
-                    <UptimeHistoryBar
-                      history={qualityHistoryMap[tunnel.id]}
-                      type="exitToBing"
-                    />
-                  </div>
-                }
-                status={status}
-                statusTitle={isEnabled ? "启用" : "禁用"}
-                title={tunnel.name}
-                onPress={() => setDetailTunnelId(tunnel.id)}
-              />
-            );
-          })}
-        </ListGroup>
       )}
     </div>
   );
