@@ -564,16 +564,12 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	appName := "FLYX"
-	if cfg, err := h.repo.GetConfigByName("app_name"); err == nil && cfg != nil && strings.TrimSpace(cfg.Value) != "" {
-		appName = strings.TrimSpace(cfg.Value)
-	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=%d; expire=%d", up, down, total, expire))
 	w.Header().Set("Profile-Update-Interval", "12")
 	// Clients use the file name as the profile name.
-	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(appName+" - "+sub.Name))
+	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(sub.Name))
 	if r.Method == http.MethodHead {
 		return
 	}
