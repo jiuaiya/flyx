@@ -711,6 +711,9 @@ export default function InboundPage() {
           ...(latency && !latencyTiles
             ? ([["延迟", latency]] as Array<[string, React.ReactNode]>)
             : []),
+          ...(!item.external && unreachable && probe?.error
+            ? ([["检测", probe.error]] as Array<[string, React.ReactNode]>)
+            : []),
         ]}
         selectMode={selectMode}
         selected={selected}
@@ -718,7 +721,9 @@ export default function InboundPage() {
           unreachable
             ? "连不上"
             : running
-              ? "运行中"
+              ? !item.external && probe
+                ? "可连接"
+                : "运行中"
               : item.enabled
                 ? "异常"
                 : "已停用"
