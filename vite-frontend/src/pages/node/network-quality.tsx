@@ -954,6 +954,7 @@ export function NodeNetworkQuality({
                       width={96}
                     >
                       <LineChart
+                        accessibilityLayer={false}
                         data={[{ t: 0 }]}
                         margin={{ top: 16, right: 24, bottom: 42, left: 4 }}
                       >
