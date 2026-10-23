@@ -47,6 +47,7 @@ import {
 import { ConfigSection, Field, SubHeading } from "@/pages/config/section";
 import { isAdmin } from "@/utils/auth";
 import { getCachedConfigs, configCache, updateSiteConfig } from "@/config/site";
+import { githubCallbackUrl } from "@/utils/github-login";
 import {
   DEFAULT_TUNNEL_QUALITY_INTERVAL_SEC,
   MAX_TUNNEL_QUALITY_INTERVAL_SEC,
@@ -192,6 +193,40 @@ const CONFIG_ITEMS: ConfigItem[] = [
     dependsValue: "true",
   },
   {
+    key: "github_login_enabled",
+    label: "启用 GitHub 登录",
+    description:
+      "用户在个人中心绑定 GitHub 账号后，可在登录页用 GitHub 登录；未绑定的账号无法登录",
+    type: "switch",
+  },
+  {
+    key: "github_oauth_client_id",
+    label: "GitHub OAuth App Client ID",
+    placeholder: "Ov23li...",
+    description: `在 GitHub → Settings → Developer settings → OAuth Apps 新建，Authorization callback URL 只填这一个：${githubCallbackUrl()}`,
+    type: "input",
+    dependsOn: "github_login_enabled",
+    dependsValue: "true",
+  },
+  {
+    key: "github_oauth_secret",
+    label: "GitHub OAuth App Client Secret",
+    placeholder: "请输入 Client Secret",
+    description: "与 Client ID 成对使用，只有管理员可见",
+    type: "input",
+    dependsOn: "github_login_enabled",
+    dependsValue: "true",
+  },
+  {
+    key: "admin_password_login_disabled",
+    label: "禁止管理员使用密码登录",
+    description:
+      "管理员账号只能用 GitHub 或通行证密钥登录，普通用户照常用密码登录。需所有管理员先绑定 GitHub。被锁在外面时，在服务器执行 docker exec flux-panel-backend /app/paneld enable-password-login 恢复",
+    type: "switch",
+    dependsOn: "github_login_enabled",
+    dependsValue: "true",
+  },
+  {
     key: "github_proxy_enabled",
     label: "开启 GitHub 加速",
     description:
@@ -242,6 +277,8 @@ const getInitialConfigs = (): Record<string, string> => {
     "captcha_enabled",
     "cloudflare_site_key",
     "cloudflare_secret_key",
+    "github_login_enabled",
+    "github_oauth_client_id",
     "forward_compact_mode",
     "monitor_tunnel_quality_enabled",
     TUNNEL_QUALITY_INTERVAL_CONFIG_KEY,
@@ -305,6 +342,10 @@ const SECTION_CONFIG_KEYS: Partial<Record<SectionKey, string[]>> = {
     "captcha_enabled",
     "cloudflare_site_key",
     "cloudflare_secret_key",
+    "github_login_enabled",
+    "github_oauth_client_id",
+    "github_oauth_secret",
+    "admin_password_login_disabled",
     "allow_local_remote_addr",
   ],
   network: [
@@ -1538,7 +1579,9 @@ export default function ConfigPage() {
 
         <ConfigSection
           {...sectionProps("security")}
-          summary={`登录验证码${onOff("captcha_enabled")} · 转发到内网地址${onOff(
+          summary={`登录验证码${onOff("captcha_enabled")} · GitHub 登录${onOff(
+            "github_login_enabled",
+          )} · 转发到内网地址${onOff(
             "allow_local_remote_addr",
             "允许",
             "禁止",
@@ -1548,6 +1591,10 @@ export default function ConfigPage() {
           {renderItem("captcha_enabled")}
           {renderItem("cloudflare_site_key")}
           {renderItem("cloudflare_secret_key")}
+          {renderItem("github_login_enabled")}
+          {renderItem("github_oauth_client_id")}
+          {renderItem("github_oauth_secret")}
+          {renderItem("admin_password_login_disabled")}
           {renderItem("allow_local_remote_addr")}
         </ConfigSection>
 

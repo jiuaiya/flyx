@@ -18,9 +18,12 @@ import {
   getPasskeyStatus,
   beginPasskeyLogin,
   finishPasskeyLogin,
+  getGithubStatus,
+  beginGithubLogin,
 } from "@/api";
 import { writeLoginSession } from "@/utils/session";
 import { getPasskey } from "@/utils/passkey";
+import { githubCallbackUrl, goToGithub } from "@/utils/github-login";
 import { useWebViewMode } from "@/hooks/useWebViewMode";
 
 interface LoginForm {
@@ -40,8 +43,35 @@ export default function IndexPage() {
   const [showCaptcha, setShowCaptcha] = useState(false);
   const [siteKey, setSiteKey] = useState("");
   const [passkeyEnabled, setPasskeyEnabled] = useState(false);
+  const [githubEnabled, setGithubEnabled] = useState(false);
   const navigate = useNavigate();
   const isWebView = useWebViewMode();
+
+  // The app's WebView can't come back from GitHub, so no button there.
+  useEffect(() => {
+    if (isWebView) return;
+    getGithubStatus()
+      .then((res) => setGithubEnabled(res.code === 0 && res.data.enabled))
+      .catch(() => setGithubEnabled(false));
+  }, [isWebView]);
+
+  const handleGithubLogin = async () => {
+    setLoading(true);
+    try {
+      const res = await beginGithubLogin(githubCallbackUrl());
+
+      if (res.code !== 0) {
+        toast.error(res.msg || "无法使用 GitHub 登录");
+        setLoading(false);
+
+        return;
+      }
+      goToGithub("login", res.data.url);
+    } catch {
+      toast.error("无法使用 GitHub 登录");
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (
@@ -280,6 +310,16 @@ export default function IndexPage() {
                     onPress={() => void handlePasskeyLogin()}
                   >
                     选择通行证密钥登录
+                  </Button>
+                )}
+                {githubEnabled && (
+                  <Button
+                    className="h-12 rounded-xl"
+                    disabled={loading}
+                    variant="bordered"
+                    onPress={() => void handleGithubLogin()}
+                  >
+                    使用 GitHub 登录
                   </Button>
                 )}
               </div>

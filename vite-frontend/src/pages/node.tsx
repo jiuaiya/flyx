@@ -67,7 +67,6 @@ import {
 } from "@/components/page-kit";
 import { CARD_GRID } from "@/components/info-card";
 import { getRemoteSyncErrorMessage } from "@/pages/node/display";
-import { tryCopyInstallCommand } from "@/pages/node/install-command";
 import { NodeTuneModal } from "@/pages/node/tune-modal";
 import { copyWithToast } from "@/utils/clipboard";
 import {
@@ -102,6 +101,7 @@ import {
 } from "@/pages/node/confirm-modals";
 import {
   InstallCommandModal,
+  type InstallCommands,
   UpgradeNodeModal,
 } from "@/pages/node/agent-modals";
 import { NodeFilterModal } from "@/pages/node/filter-modal";
@@ -208,7 +208,10 @@ export default function NodePage({
 
   // 安装命令相关状态
   const [installCommandModal, setInstallCommandModal] = useState(false);
-  const [installCommand, setInstallCommand] = useState("");
+  const [installCommands, setInstallCommands] = useState<InstallCommands>({
+    script: "",
+    docker: "",
+  });
   const [currentNodeName, setCurrentNodeName] = useState("");
 
   // 升级相关状态
@@ -298,10 +301,17 @@ export default function NodePage({
 
   // 加载节点列表
   const nodesLoadingRef = useRef(false);
+  // A reload asked for during a silent poll (after an edit) runs after it.
+  const nodesReloadRef = useRef(false);
   const loadNodes = useCallback(async (options?: { silent?: boolean }) => {
-    if (nodesLoadingRef.current) return;
-    nodesLoadingRef.current = true;
     const silent = options?.silent ?? false;
+
+    if (nodesLoadingRef.current) {
+      if (!silent) nodesReloadRef.current = true;
+
+      return;
+    }
+    nodesLoadingRef.current = true;
 
     if (!silent) {
       setLoading(true);
@@ -364,6 +374,10 @@ export default function NodePage({
       nodesLoadingRef.current = false;
       if (!silent) {
         setLoading(false);
+      }
+      if (nodesReloadRef.current) {
+        nodesReloadRef.current = false;
+        void loadNodes({ silent: true });
       }
     }
   }, []);
@@ -816,18 +830,18 @@ export default function NodePage({
     );
 
     try {
-      const res = await getNodeInstallCommand(node.id, channel);
+      const [res, dockerRes] = await Promise.all([
+        getNodeInstallCommand(node.id, channel),
+        getNodeInstallCommand(node.id, channel, "docker").catch(() => null),
+      ]);
 
       if (res.code === 0 && res.data) {
-        const copied = await tryCopyInstallCommand(res.data);
-
-        if (copied) {
-          toast.success("安装命令已复制到剪贴板");
-        } else {
-          setInstallCommand(res.data);
-          setCurrentNodeName(node.name);
-          setInstallCommandModal(true);
-        }
+        setInstallCommands({
+          script: res.data,
+          docker: dockerRes?.code === 0 ? dockerRes.data || "" : "",
+        });
+        setCurrentNodeName(node.name);
+        setInstallCommandModal(true);
       } else {
         toast.error(res.msg || "获取安装命令失败");
       }
@@ -840,9 +854,8 @@ export default function NodePage({
     }
   };
 
-  // 手动复制安装命令
-  const handleManualCopy = async () => {
-    if (await copyWithToast(installCommand, "安装命令已复制到剪贴板")) {
+  const handleCopyCommand = async (command: string) => {
+    if (await copyWithToast(command, "安装命令已复制到剪贴板")) {
       setInstallCommandModal(false);
     }
   };
@@ -2002,9 +2015,9 @@ export default function NodePage({
       {/* 安装命令模态框 */}
       <InstallCommandModal
         currentNodeName={currentNodeName}
-        handleManualCopy={handleManualCopy}
-        installCommand={installCommand}
+        handleCopyCommand={handleCopyCommand}
         installCommandModal={installCommandModal}
+        installCommands={installCommands}
         setInstallCommandModal={setInstallCommandModal}
       />
 

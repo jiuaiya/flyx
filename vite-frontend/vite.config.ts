@@ -10,8 +10,8 @@ export default defineConfig({
     VitePWA({
       // No service worker for the online demo.
       disable: process.env.VITE_DEMO === "true",
-      registerType: "prompt",
-      injectRegister: "auto",
+      registerType: "autoUpdate",
+      injectRegister: false,
       includeAssets: ["favicon.ico", "apple-touch-icon.png"],
       manifest: {
         name: "FLYX",
@@ -42,6 +42,9 @@ export default defineConfig({
         ],
       },
       workbox: {
+        importScripts: ["sw-update.js"],
+        skipWaiting: true,
+        clientsClaim: true,
         navigateFallback: "/index.html",
         cleanupOutdatedCaches: true,
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,

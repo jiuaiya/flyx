@@ -43,16 +43,15 @@ type Handler struct {
 	captchaTokens  map[string]int64
 	passkeyMu      sync.Mutex
 	passkeyPending map[string]passkeyCeremony
+	githubMu       sync.Mutex
+	githubPending  map[string]githubState
 
-	jobsMu              sync.Mutex
-	jobsCancel          context.CancelFunc
-	jobsCtx             context.Context
-	jobsStarted         bool
-	jobsWG              sync.WaitGroup
-	reconnectProbes     *nodeReconnectProbeQueue
-	nodeLatencyProbeMu  sync.Mutex
-	relayLatencyProbeMu sync.Mutex
-	inboundReachProbeMu sync.Mutex
+	jobsMu          sync.Mutex
+	jobsCancel      context.CancelFunc
+	jobsCtx         context.Context
+	jobsStarted     bool
+	jobsWG          sync.WaitGroup
+	reconnectProbes *nodeReconnectProbeQueue
 
 	upgradeMu                   sync.Mutex
 	systemUpgradeMu             sync.Mutex
@@ -123,6 +122,7 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		nftablesManager:          runtimenft.NewManager(nil),
 		captchaTokens:            make(map[string]int64),
 		passkeyPending:           make(map[string]passkeyCeremony),
+		githubPending:            make(map[string]githubState),
 		pendingUpgradeRedeploy:   make(map[int64]struct{}),
 		nodeOnlineRedeployAt:     make(map[int64]time.Time),
 		nodeOnlineRedeployQueued: make(map[int64]struct{}),
@@ -179,6 +179,13 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/user/passkey/register/finish", h.passkeyRegisterFinish)
 	mux.HandleFunc("/api/v1/user/passkey/list", h.passkeyList)
 	mux.HandleFunc("/api/v1/user/passkey/delete", h.passkeyDelete)
+	mux.HandleFunc("/api/v1/user/github/status", h.githubStatus)
+	mux.HandleFunc("/api/v1/user/github/login/begin", h.githubLoginBegin)
+	mux.HandleFunc("/api/v1/user/github/login/finish", h.githubLoginFinish)
+	mux.HandleFunc("/api/v1/user/github/info", h.githubInfo)
+	mux.HandleFunc("/api/v1/user/github/bind/begin", h.githubBindBegin)
+	mux.HandleFunc("/api/v1/user/github/bind/finish", h.githubBindFinish)
+	mux.HandleFunc("/api/v1/user/github/unbind", h.githubUnbind)
 	mux.HandleFunc("/api/v1/user/list", h.userList)
 	mux.HandleFunc("/api/v1/user/create", h.userCreate)
 	mux.HandleFunc("/api/v1/user/update", h.userUpdate)
@@ -275,6 +282,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/inbound/sub/info", h.inboundSubInfo)
 	mux.HandleFunc("/api/v1/inbound/relay/list", h.inboundRelayList)
 	mux.HandleFunc("/api/v1/inbound/relay/create", h.inboundRelayCreate)
+	mux.HandleFunc("/api/v1/inbound/relay/update", h.inboundRelayUpdate)
 	mux.HandleFunc("/api/v1/inbound/relay/delete", h.inboundRelayDelete)
 	mux.HandleFunc("/api/v1/inbound/relay/probe", h.inboundRelayProbe)
 	mux.HandleFunc("/api/v1/open_api/sub/", h.openSubscription)
@@ -438,6 +446,11 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 	if user.Status == 0 {
 		response.WriteJSON(w, response.ErrDefault("账号被停用"))
+		return
+	}
+	// Checked after the password so it doesn't reveal which names are admins.
+	if user.RoleID == 0 && h.adminPasswordLoginDisabled() {
+		response.WriteJSON(w, response.ErrDefault("管理员已禁止使用密码登录，请使用 GitHub 或通行证密钥登录"))
 		return
 	}
 	issueAt := time.Now()
@@ -994,6 +1007,10 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("配置数据不能为空"))
 		return
 	}
+	if err := h.checkPasswordLoginSwitch(payload); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 
 	now := time.Now().UnixMilli()
 	for k, v := range payload {
@@ -1055,6 +1072,10 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 
 	value, err := normalizeAndValidateConfigValue(name, req.Value)
 	if err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if err := h.checkPasswordLoginSwitch(map[string]string{name: value}); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}

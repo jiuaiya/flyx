@@ -1505,6 +1505,16 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	w.sendUpgradeProgress("installing", 80, "准备重启...")
 	fmt.Printf("✅ 升级包下载完成 (%d bytes), 准备重启...\n", downloaded)
 
+	if InContainer() {
+		if err := installAndRestartInContainer(tmpPath, binaryPath); err != nil {
+			os.Remove(tmpPath)
+			return err
+		}
+		w.sendUpgradeProgress("installing", 100, "重启中...")
+		fmt.Println("🔄 新版本已就位, 容器将在 1 秒后重启...")
+		return nil
+	}
+
 	// 执行重启脚本
 	// 使用 systemd-run 在独立的 transient unit 中运行重启脚本，
 	// 避免 systemctl stop 杀死 flux_agent cgroup 内所有进程（包括此脚本自身）导致 mv 未执行。
@@ -1530,6 +1540,25 @@ func (w *WebSocketReporter) handleRollbackAgent(data interface{}) error {
 	}
 
 	fmt.Println("🔄 开始回退到旧版本...")
+
+	if InContainer() {
+		// The running binary can't be written in place; copy the backup
+		// beside it and rename over it.
+		data, err := os.ReadFile(backupPath)
+		if err != nil {
+			return fmt.Errorf("读取备份失败: %v", err)
+		}
+		tmpPath := binaryPath + ".new"
+		if err := os.WriteFile(tmpPath, data, 0755); err != nil {
+			return fmt.Errorf("写入备份失败: %v", err)
+		}
+		if err := installAndRestartInContainer(tmpPath, binaryPath); err != nil {
+			os.Remove(tmpPath)
+			return err
+		}
+		fmt.Println("🔄 已回退, 容器将在 1 秒后重启...")
+		return nil
+	}
 
 	// 执行回退脚本（同升级逻辑，使用 systemd-run 避免 cgroup 问题）
 	script := fmt.Sprintf("sleep 1 && systemctl stop flux_agent && cp %s %s && systemctl start flux_agent", backupPath, binaryPath)
@@ -1875,7 +1904,7 @@ func (w *WebSocketReporter) handleTcpPing(ctx context.Context, data interface{})
 
 	// 执行TCP ping操作
 	avgTime, packetLoss, err := tcpPingHost(ctx, req.IP, req.Port, req.Count, req.Timeout)
-	if ctx.Err() != nil {
+	if err != nil && ctx.Err() != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return TcpPingResponse{}, fmt.Errorf("TCP探测执行超时（含排队等待）")
 		}
@@ -2201,9 +2230,12 @@ func tcpPingHost(ctx context.Context, ip string, port int, count int, timeoutMs 
 		fmt.Printf("🎯 使用IP地址进行测试: %s\n", target)
 	}
 
+	// attempts counts the dials that finished; one cut short by ctx is not
+	// a loss. When the budget runs out the attempts so far are the result.
+	attempts := 0
 	for i := 0; i < count; i++ {
-		if err := ctx.Err(); err != nil {
-			return 0, 0, err
+		if ctx.Err() != nil {
+			break
 		}
 		start := time.Now()
 
@@ -2212,6 +2244,10 @@ func tcpPingHost(ctx context.Context, ip string, port int, count int, timeoutMs 
 		conn, err := dialer.DialContext(ctx, "tcp", target)
 
 		elapsed := time.Since(start)
+		if err != nil && ctx.Err() != nil {
+			break
+		}
+		attempts++
 
 		if err != nil {
 			fmt.Printf("  第%d次连接失败: %v (%.2fms)\n", i+1, err, elapsed.Seconds()*1000)
@@ -2229,17 +2265,19 @@ func tcpPingHost(ctx context.Context, ip string, port int, count int, timeoutMs 
 			case <-timer.C:
 			case <-ctx.Done():
 				timer.Stop()
-				return 0, 0, ctx.Err()
 			}
 		}
 	}
 
 	if successCount == 0 {
+		if err := ctx.Err(); err != nil {
+			return 0, 0, err
+		}
 		return 0, 100.0, fmt.Errorf("所有TCP连接尝试都失败")
 	}
 
 	avgTime := totalTime / float64(successCount)
-	packetLoss := float64(count-successCount) / float64(count) * 100
+	packetLoss := float64(attempts-successCount) / float64(attempts) * 100
 
 	fmt.Printf("✅ TCP ping完成: 平均连接时间 %.2fms，失败率 %.1f%%\n", avgTime, packetLoss)
 

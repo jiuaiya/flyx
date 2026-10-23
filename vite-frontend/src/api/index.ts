@@ -124,6 +124,31 @@ export const listPasskeys = () =>
 export const deletePasskey = (id: string, password: string) =>
   Network.post("/user/passkey/delete", { id, password });
 
+export interface GithubInfo {
+  enabled: boolean;
+  bound: boolean;
+  login?: string;
+  createdAt?: number;
+}
+
+export const getGithubStatus = () =>
+  Network.post<{ enabled: boolean }>("/user/github/status");
+export const beginGithubLogin = (redirectUri: string) =>
+  Network.post<{ url: string }>("/user/github/login/begin", { redirectUri });
+export const finishGithubLogin = (code: string, state: string) =>
+  Network.post<LoginResponse>("/user/github/login/finish", { code, state });
+export const getGithubInfo = () =>
+  Network.post<GithubInfo>("/user/github/info");
+export const beginGithubBind = (redirectUri: string, password: string) =>
+  Network.post<{ url: string }>("/user/github/bind/begin", {
+    redirectUri,
+    password,
+  });
+export const finishGithubBind = (code: string, state: string) =>
+  Network.post<{ login: string }>("/user/github/bind/finish", { code, state });
+export const unbindGithub = (password: string) =>
+  Network.post("/user/github/unbind", { password });
+
 // 用户CRUD操作 - 全部使用POST请求
 export const createUser = (data: UserMutationPayload) =>
   Network.post("/user/create", data);
@@ -152,7 +177,8 @@ export const deleteNode = (id: number) => Network.post("/node/delete", { id });
 export const getNodeInstallCommand = (
   id: number,
   channel: ReleaseChannel = "stable",
-) => Network.post<string>("/node/install", { id, channel });
+  mode: "script" | "docker" = "script",
+) => Network.post<string>("/node/install", { id, channel, mode });
 export const updateNodeOrder = (data: {
   nodes: Array<{ id: number; inx: number }>;
 }) => Network.post("/node/update-order", data);
@@ -1187,5 +1213,11 @@ export const createInboundRelay = (data: {
   name?: string;
   shareHost?: string;
 }) => Network.post<{ id: number }>("/inbound/relay/create", data);
+/** Renames a relay and changes its share host; the forward is untouched. */
+export const updateInboundRelay = (data: {
+  id: number;
+  name: string;
+  shareHost: string;
+}) => Network.post("/inbound/relay/update", data);
 export const deleteInboundRelay = (id: number, force = false) =>
   Network.post("/inbound/relay/delete", { id, force });

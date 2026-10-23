@@ -3,6 +3,8 @@ import type { InboundApiItem, InboundRelayApiItem } from "@/api/types";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
+import { useVisiblePolling } from "@/hooks/use-visible-polling";
+import { latestProbe } from "@/utils/latest-probe";
 import { getInboundList, getInboundRelays, probeInboundRelays } from "@/api";
 import { AnimatedPage } from "@/components/animated-page";
 import { PageLoadingState } from "@/components/page-state";
@@ -19,8 +21,6 @@ import TunnelPage from "@/pages/tunnel";
 import { TunnelMonitorView } from "@/pages/node/tunnel-monitor-view";
 import { RelayLandingCard } from "@/pages/relay/relay-landing-card";
 import { Button } from "@/shadcn-bridge/heroui/button";
-import { useVisiblePolling } from "@/hooks/use-visible-polling";
-import { latestProbe } from "@/utils/latest-probe";
 
 type RelayTab = "lines" | "tunnels" | "rules" | "quality";
 
@@ -59,12 +59,17 @@ function LinesView() {
   const [editing, setEditing] = useState<InboundApiItem | null>(null);
   const [onlyWithRelays, setOnlyWithRelays] = useState(false);
   const [query, setQuery] = useState("");
-
   const [probingIds, setProbingIds] = useState<Set<number>>(new Set());
   const loadingRef = useRef(false);
+  // A reload asked for during a silent poll (after an edit) runs after it.
+  const reloadRef = useRef(false);
 
-  const load = useCallback(async (silent = false) => {
-    if (loadingRef.current) return;
+  const load = useCallback(async (silent = false): Promise<void> => {
+    if (loadingRef.current) {
+      if (!silent) reloadRef.current = true;
+
+      return;
+    }
     loadingRef.current = true;
     try {
       const [inRes, relRes] = await Promise.all([
@@ -90,6 +95,10 @@ function LinesView() {
     } finally {
       loadingRef.current = false;
       setLoading(false);
+      if (reloadRef.current) {
+        reloadRef.current = false;
+        void load(true);
+      }
     }
   }, []);
 

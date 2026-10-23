@@ -2,21 +2,12 @@ import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { toast } from "react-hot-toast";
 import { AnimatePresence, motion } from "framer-motion";
-import { KeyRound, LogOut } from "lucide-react";
+import { LogOut, UserRound } from "lucide-react";
 
 import { Button } from "@/shadcn-bridge/heroui/button";
-import {
-  Modal,
-  ModalContent,
-  ModalHeader,
-  ModalBody,
-  ModalFooter,
-  useDisclosure,
-} from "@/shadcn-bridge/heroui/modal";
-import { Input } from "@/shadcn-bridge/heroui/input";
 import { BrandLogo } from "@/components/brand-logo";
 import { VersionFooter } from "@/components/version-footer";
-import { getMonitorAccess, updatePassword } from "@/api";
+import { getMonitorAccess } from "@/api";
 import { safeLogout } from "@/utils/logout";
 import { siteConfig } from "@/config/site";
 import { useMobileBreakpoint } from "@/hooks/useMobileBreakpoint";
@@ -35,13 +26,6 @@ interface MenuItem {
   section?: string;
 }
 
-interface PasswordForm {
-  newUsername: string;
-  currentPassword: string;
-  newPassword: string;
-  confirmPassword: string;
-}
-
 export default function AdminLayout({
   children,
 }: {
@@ -49,7 +33,6 @@ export default function AdminLayout({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { isOpen, onOpen, onOpenChange } = useDisclosure();
   const [mobileMenuVisible, setMobileMenuVisible] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(
     () => localStorage.getItem("sidebar_collapsed") === "true",
@@ -60,13 +43,6 @@ export default function AdminLayout({
   const [monitorAccessReason, setMonitorAccessReason] = useState<string | null>(
     null,
   );
-  const [passwordLoading, setPasswordLoading] = useState(false);
-  const [passwordForm, setPasswordForm] = useState<PasswordForm>({
-    newUsername: "",
-    currentPassword: "",
-    newPassword: "",
-    confirmPassword: "",
-  });
   const isMobile = useMobileBreakpoint();
 
   // 菜单项配置：管理员按 线路 / 分发 / 系统 分组（用户页含分组和限速），普通用户保持原样
@@ -314,74 +290,6 @@ export default function AdminLayout({
     }
   };
 
-  // 密码表单验证
-  const validatePasswordForm = (): boolean => {
-    if (!passwordForm.newUsername.trim()) {
-      toast.error("请输入新用户名");
-
-      return false;
-    }
-    if (passwordForm.newUsername.length < 3) {
-      toast.error("用户名长度至少3位");
-
-      return false;
-    }
-    if (!passwordForm.currentPassword) {
-      toast.error("请输入当前密码");
-
-      return false;
-    }
-    if (!passwordForm.newPassword) {
-      toast.error("请输入新密码");
-
-      return false;
-    }
-    if (passwordForm.newPassword.length < 6) {
-      toast.error("新密码长度不能少于6位");
-
-      return false;
-    }
-    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-      toast.error("两次输入密码不一致");
-
-      return false;
-    }
-
-    return true;
-  };
-
-  // 提交密码修改
-  const handlePasswordSubmit = async () => {
-    if (!validatePasswordForm()) return;
-
-    setPasswordLoading(true);
-    try {
-      const response = await updatePassword(passwordForm);
-
-      if (response.code === 0) {
-        toast.success("密码修改成功，请重新登录");
-        onOpenChange();
-        handleLogout();
-      } else {
-        toast.error(response.msg || "密码修改失败");
-      }
-    } catch {
-      toast.error("修改密码时发生错误");
-    } finally {
-      setPasswordLoading(false);
-    }
-  };
-
-  // 重置密码表单
-  const resetPasswordForm = () => {
-    setPasswordForm({
-      newUsername: "",
-      currentPassword: "",
-      newPassword: "",
-      confirmPassword: "",
-    });
-  };
-
   // 过滤菜单项（根据权限）
   const filteredMenuItems = menuItems
     .filter((item) => (isAdmin ? !item.userOnly : !item.adminOnly))
@@ -392,7 +300,7 @@ export default function AdminLayout({
 
   return (
     <div
-      className={`flex ${isMobile ? "min-h-screen p-0" : "h-screen p-6 gap-6"} bg-mesh-gradient overflow-hidden`}
+      className={`flex ${isMobile ? "min-h-screen p-0" : "h-screen p-6 gap-6 [@media(max-height:760px)]:p-4 [@media(max-height:760px)]:gap-4"} bg-mesh-gradient overflow-hidden`}
     >
       {/* 移动端遮罩层 */}
       {isMobile && mobileMenuVisible && (
@@ -416,7 +324,7 @@ export default function AdminLayout({
         flex flex-col flex-shrink-0      `}
       >
         {/* Logo 区域 */}
-        <div className="px-6 py-8 flex items-center overflow-hidden whitespace-nowrap box-border">
+        <div className="px-6 py-6 [@media(max-height:760px)]:py-4 flex items-center overflow-hidden whitespace-nowrap box-border">
           <BrandLogo className="h-10 w-10 flex-shrink-0 rounded-xl" size={40} />
           <div
             className={`transition-all duration-300 overflow-hidden ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[180px] opacity-100 ml-3"}`}
@@ -448,7 +356,7 @@ export default function AdminLayout({
                     (isCollapsed ? (
                       <div className="mx-3 my-2 border-t border-default-200/70" />
                     ) : (
-                      <div className="px-3 pb-1 pt-3 text-[11px] font-medium tracking-wide text-default-400">
+                      <div className="px-3 pb-1 pt-3 text-[11px] font-medium tracking-wide text-default-400 [@media(max-height:760px)]:pt-2">
                         {item.section}
                       </div>
                     ))}
@@ -457,6 +365,7 @@ export default function AdminLayout({
                     className={`
                        w-full flex items-center px-3 py-2.5 rounded-lg text-left
                        relative min-h-[44px] overflow-hidden transition-colors
+                       [@media(max-height:760px)]:min-h-[38px] [@media(max-height:760px)]:py-2
                        ${isMonitorBlocked ? "opacity-60" : ""}
                        ${
                          isActive
@@ -512,15 +421,16 @@ export default function AdminLayout({
         </nav>
 
         {/* 底部账号操作、版权信息和折叠按钮 */}
-        <div className="px-5 py-6 mt-auto flex-shrink-0 flex flex-col gap-4 overflow-hidden whitespace-nowrap box-border">
+        <div className="px-5 py-4 [@media(max-height:760px)]:py-3 [@media(max-height:760px)]:gap-2 mt-auto flex-shrink-0 flex flex-col gap-3 overflow-hidden whitespace-nowrap box-border">
           {!isMobile && (
             <div className="flex flex-col gap-1">
               {[
+                // Password, passkeys and GitHub live on the account page.
                 {
-                  key: "password",
-                  label: "修改密码",
-                  icon: KeyRound,
-                  onPress: onOpen,
+                  key: "account",
+                  label: "账户与登录",
+                  icon: UserRound,
+                  onPress: () => navigate("/profile"),
                 },
                 {
                   key: "logout",
@@ -531,7 +441,7 @@ export default function AdminLayout({
               ].map((a) => (
                 <button
                   key={a.key}
-                  className={`flex h-9 items-center rounded-xl text-sm text-default-500 transition-colors hover:bg-default-100 hover:text-foreground ${isCollapsed ? "justify-center px-0" : "gap-3 px-3"}`}
+                  className={`flex h-9 [@media(max-height:760px)]:h-8 items-center rounded-xl text-sm text-default-500 transition-colors hover:bg-default-100 hover:text-foreground ${isCollapsed ? "justify-center px-0" : "gap-3 px-3"}`}
                   title={a.label}
                   type="button"
                   onClick={a.onPress}
@@ -542,57 +452,63 @@ export default function AdminLayout({
               ))}
             </div>
           )}
+          {/* Version and the collapse button share a row so short
+              laptop screens still fit the whole menu. */}
           <div
-            className={`transition-all duration-300 overflow-hidden flex items-center ${isCollapsed ? "max-w-0 opacity-0" : "max-w-[200px] opacity-100"}`}
+            className={`flex items-center ${isCollapsed ? "justify-center" : "justify-between gap-2"}`}
           >
-            <VersionFooter
-              poweredClassName="text-xs text-gray-400 dark:text-gray-500"
-              updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-500/90 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
-              version={siteConfig.version}
-              versionClassName="text-xs text-gray-400 dark:text-gray-500"
-            />
-          </div>
-
-          {/* 桌面端折叠按钮 */}
-          {!isMobile && (
-            <Button
-              isIconOnly
-              className="flex-shrink-0 text-gray-400 hover:text-gray-700 dark:text-gray-500 dark:hover:text-gray-300 min-w-0 w-10 h-10 rounded-full mx-auto"
-              size="sm"
-              variant="light"
-              onPress={toggleCollapse}
+            <div
+              className={`min-w-0 transition-all duration-300 overflow-hidden flex items-center ${isCollapsed ? "max-w-0 opacity-0 hidden" : "max-w-[200px] opacity-100"}`}
             >
-              {isCollapsed ? (
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    d="M13 5l7 7-7 7M5 5l7 7-7 7"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                  />
-                </svg>
-              ) : (
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    d="M11 19l-7-7 7-7m8 14l-7-7 7-7"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                  />
-                </svg>
-              )}
-            </Button>
-          )}
+              <VersionFooter
+                poweredClassName="text-xs text-gray-400 dark:text-gray-500"
+                updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-500/90 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
+                version={siteConfig.version}
+                versionClassName="text-xs text-gray-400 dark:text-gray-500"
+              />
+            </div>
+
+            {/* 桌面端折叠按钮 */}
+            {!isMobile && (
+              <Button
+                isIconOnly
+                className="flex-shrink-0 text-gray-400 hover:text-gray-700 dark:text-gray-500 dark:hover:text-gray-300 min-w-0 w-9 h-9 rounded-full"
+                size="sm"
+                variant="light"
+                onPress={toggleCollapse}
+              >
+                {isCollapsed ? (
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      d="M13 5l7 7-7 7M5 5l7 7-7 7"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                    />
+                  </svg>
+                ) : (
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      d="M11 19l-7-7 7-7m8 14l-7-7 7-7"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                    />
+                  </svg>
+                )}
+              </Button>
+            )}
+          </div>
         </div>
       </aside>
 
@@ -640,99 +556,6 @@ export default function AdminLayout({
           </AnimatePresence>
         </main>
       </div>
-
-      {/* 修改密码弹窗 */}
-      <Modal
-        backdrop="blur"
-        classNames={{
-          base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
-        }}
-        isOpen={isOpen}
-        placement="center"
-        scrollBehavior="inside"
-        size="2xl"
-        onOpenChange={() => {
-          onOpenChange();
-          resetPasswordForm();
-        }}
-      >
-        <ModalContent>
-          {(onClose: () => void) => (
-            <>
-              <ModalHeader className="flex flex-col gap-1">
-                修改密码
-              </ModalHeader>
-              <ModalBody>
-                <div className="space-y-4">
-                  <Input
-                    label="新用户名"
-                    placeholder="请输入新用户名（至少3位）"
-                    value={passwordForm.newUsername}
-                    variant="bordered"
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                      setPasswordForm((prev) => ({
-                        ...prev,
-                        newUsername: e.target.value,
-                      }))
-                    }
-                  />
-                  <Input
-                    label="当前密码"
-                    placeholder="请输入当前密码"
-                    type="password"
-                    value={passwordForm.currentPassword}
-                    variant="bordered"
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                      setPasswordForm((prev) => ({
-                        ...prev,
-                        currentPassword: e.target.value,
-                      }))
-                    }
-                  />
-                  <Input
-                    label="新密码"
-                    placeholder="请输入新密码（至少6位）"
-                    type="password"
-                    value={passwordForm.newPassword}
-                    variant="bordered"
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                      setPasswordForm((prev) => ({
-                        ...prev,
-                        newPassword: e.target.value,
-                      }))
-                    }
-                  />
-                  <Input
-                    label="确认密码"
-                    placeholder="请再次输入新密码"
-                    type="password"
-                    value={passwordForm.confirmPassword}
-                    variant="bordered"
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                      setPasswordForm((prev) => ({
-                        ...prev,
-                        confirmPassword: e.target.value,
-                      }))
-                    }
-                  />
-                </div>
-              </ModalBody>
-              <ModalFooter>
-                <Button color="default" variant="light" onPress={onClose}>
-                  取消
-                </Button>
-                <Button
-                  color="primary"
-                  isLoading={passwordLoading}
-                  onPress={handlePasswordSubmit}
-                >
-                  确定
-                </Button>
-              </ModalFooter>
-            </>
-          )}
-        </ModalContent>
-      </Modal>
     </div>
   );
 }

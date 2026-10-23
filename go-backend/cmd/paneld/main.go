@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -19,6 +20,10 @@ import (
 
 func main() {
 	cfg := config.FromEnv()
+	if len(os.Args) > 1 && os.Args[1] == "enable-password-login" {
+		enablePasswordLogin(cfg)
+		return
+	}
 	generated, err := config.EnsureJWTSecret(&cfg)
 	if err != nil {
 		log.Fatalf("JWT_SECRET is empty and no secret could be stored: %v", err)
@@ -55,4 +60,19 @@ func main() {
 	if err := a.Shutdown(ctx); err != nil {
 		log.Fatalf("shutdown failed: %v", err)
 	}
+}
+
+// enablePasswordLogin lets admins log in with their password again, for an
+// admin locked out after turning it off (e.g. GitHub unreachable):
+// docker exec flux-panel-backend /app/paneld enable-password-login
+func enablePasswordLogin(cfg config.Config) {
+	r, err := app.OpenRepository(cfg)
+	if err != nil {
+		log.Fatalf("open database: %v", err)
+	}
+	defer r.Close()
+	if err := r.UpsertConfig("admin_password_login_disabled", "false", time.Now().UnixMilli()); err != nil {
+		log.Fatalf("enable password login: %v", err)
+	}
+	fmt.Println("已允许管理员使用密码登录")
 }

@@ -11,7 +11,7 @@ import (
 )
 
 // An agent runs at most agentTCPPingLimit TcpPing commands at once. The
-// panel queues for a slot before sending; newer fork agents also queue
+// panel queues for a slot before sending; newer agents also queue
 // excess commands, while older agents refuse them with agentBusyMessage.
 const (
 	agentTCPPingLimit   = 8
