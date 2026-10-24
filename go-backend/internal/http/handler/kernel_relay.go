@@ -139,7 +139,7 @@ func (h *Handler) relayTarget(row *model.NodeInbound, tunnel *tunnelRecord) (str
 		}
 		if onLanding {
 			if len(exits) > 1 {
-				return "", errors.New("出口为落地节点的隧道只能有这一个出口节点")
+				return "", errors.New("出口为节点所在服务器的隧道只能有这一个出口服务器")
 			}
 			host := row.Listen
 			if isWildcardListen(host) {
@@ -150,13 +150,13 @@ func (h *Handler) relayTarget(row *model.NodeInbound, tunnel *tunnelRecord) (str
 	}
 
 	if isLoopbackListen(row.Listen) {
-		return "", errors.New("入站只监听本机，只能通过出口为落地节点的隧道转发对接")
+		return "", errors.New("入站只监听本机，只能通过出口为节点所在服务器的隧道转发对接")
 	}
 	host := row.Listen
 	if isWildcardListen(host) {
 		node, err := h.repo.GetNodeByID(row.NodeID)
 		if err != nil || node == nil {
-			return "", errors.New("落地节点不存在")
+			return "", errors.New("节点不存在")
 		}
 		host = strings.TrimSpace(node.ServerIP)
 		if v4 := strings.TrimSpace(node.ServerIPV4.String); host == "" && v4 != "" {
@@ -164,7 +164,7 @@ func (h *Handler) relayTarget(row *model.NodeInbound, tunnel *tunnelRecord) (str
 		}
 	}
 	if host == "" {
-		return "", errors.New("落地节点没有可用地址")
+		return "", errors.New("节点没有可用地址")
 	}
 	return net.JoinHostPort(strings.Trim(host, "[]"), port), nil
 }
@@ -270,7 +270,7 @@ func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRe
 		return 0, err
 	}
 	if len(entryNodes) == 0 {
-		return 0, errors.New("隧道没有入口节点")
+		return 0, errors.New("隧道没有入口服务器")
 	}
 	isNftTunnel, _, err := h.tunnelUsesNftables(tunnel.ID)
 	if err != nil {
@@ -552,10 +552,7 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if !subActive(sub, time.Now()) {
-		http.Error(w, "订阅已过期或已停用", http.StatusForbidden)
-		return
-	}
+	now := time.Now()
 
 	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
 	if format == "" {
@@ -576,12 +573,9 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = filtered
 	}
-	endpoints := h.subEndpoints(sub, rows)
-	opts := h.subOptions(parsePipeline(sub.Options))
-	opts.SingboxSnell = kernel.SingboxClientHasSnell(r.UserAgent())
-	body, contentType, err := kernel.Subscription(format, endpoints, opts)
+	c, err := h.subContextFor(rows)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
@@ -593,7 +587,7 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		up, down, total = sub.UploadBytes, sub.DownloadBytes, sub.TrafficLimit
 	} else {
 		want := map[int64]bool{}
-		for _, id := range subInboundIDs(sub, rows) {
+		for _, id := range c.inboundIDs(sub) {
 			want[id] = true
 		}
 		for _, row := range rows {
@@ -603,6 +597,27 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// A link that stopped working still answers with a profile: one node
+	// named after the reason. An error would leave the client on its old
+	// profile with no hint why.
+	var body, contentType string
+	if reason := subInactiveReason(sub, now); reason != "" {
+		body, contentType, err = kernel.Subscription(format, nil, kernel.SubOptions{Notices: []string{reason}})
+	} else {
+		p := parsePipeline(sub.Options)
+		opts := h.subOptions(p)
+		opts.SingboxSnell = kernel.SingboxClientHasSnell(r.UserAgent())
+		if p.InfoNodes {
+			opts.Notices = kernel.InfoNotices(sub.ExpireTime, up+down, total)
+		}
+		body, contentType, err = kernel.Subscription(format, h.subNodes(c, sub), opts)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=%d; expire=%d", up, down, total, expire))

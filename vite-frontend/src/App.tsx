@@ -6,37 +6,84 @@ import {
   Navigate,
 } from "react-router-dom";
 import { lazy, Suspense, useEffect } from "react";
-import { AnimatePresence } from "framer-motion";
 
 import IndexPage from "@/pages/index";
 import AdminLayout from "@/layouts/admin";
 import H5Layout from "@/layouts/h5";
 import H5SimpleLayout from "@/layouts/h5-simple";
 import { isLoggedIn } from "@/utils/auth";
+import { getAdminFlag } from "@/utils/session";
 import { siteConfig, updateSiteConfig } from "@/config/site";
 import { useH5Mode } from "@/hooks/useH5Mode";
 import { SESSION_UPDATED_EVENT } from "@/utils/session";
 import { useThemeContext } from "@/themes/context";
 import { PageLoadingState } from "@/components/page-state";
+import { ErrorBoundary } from "@/components/error-boundary";
 
 // Pages load on first visit so the login screen does not wait for all of them.
 const ChangePasswordPage = lazy(() => import("@/pages/change-password"));
-const DashboardPage = lazy(() => import("@/pages/dashboard"));
+// The pages in the main navigation, preloaded once logged in (see
+// preloadPages) so their first visit doesn't wait for the download.
+const loadDashboard = () => import("@/pages/dashboard");
+const loadNodeHub = () => import("@/pages/node-hub");
+const loadInbound = () => import("@/pages/inbound");
+const loadRelay = () => import("@/pages/relay");
+const loadSubscription = () => import("@/pages/subscription");
+const loadUserHub = () => import("@/pages/user-hub");
+const loadConfig = () => import("@/pages/config");
+const loadMySubscriptions = () => import("@/pages/my-subscriptions");
+
+const DashboardPage = lazy(loadDashboard);
 const MonitorPage = lazy(() => import("@/pages/monitor"));
 const ForwardPage = lazy(() => import("@/pages/forward"));
 const TunnelPage = lazy(() => import("@/pages/tunnel"));
 // 用户 hosts the 分组 and 限速 tabs; each tab keeps its address.
-const UserHubPage = lazy(() => import("@/pages/user-hub"));
+const UserHubPage = lazy(loadUserHub);
 // 节点 hosts the 内核 tab.
-const NodePage = lazy(() => import("@/pages/node-hub"));
+const NodePage = lazy(loadNodeHub);
 const ProfilePage = lazy(() => import("@/pages/profile"));
-const InboundPage = lazy(() => import("@/pages/inbound"));
-const RelayPage = lazy(() => import("@/pages/relay"));
-const SubscriptionPage = lazy(() => import("@/pages/subscription"));
-const MySubscriptionsPage = lazy(() => import("@/pages/my-subscriptions"));
-const ConfigPage = lazy(() => import("@/pages/config"));
+const InboundPage = lazy(loadInbound);
+const RelayPage = lazy(loadRelay);
+const SubscriptionPage = lazy(loadSubscription);
+const MySubscriptionsPage = lazy(loadMySubscriptions);
+const ConfigPage = lazy(loadConfig);
 const PanelSharingPage = lazy(() => import("@/pages/panel-sharing"));
 const GithubCallbackPage = lazy(() => import("@/pages/github-callback"));
+
+let pagesPreloaded = false;
+
+/**
+ * Downloads the main pages' code once the browser is idle after login.
+ * The service worker caches them too, but only once it is installed and
+ * after the first visit. Skipped when the user asked to save data.
+ */
+function preloadPages() {
+  const connection = (navigator as { connection?: { saveData?: boolean } })
+    .connection;
+
+  if (pagesPreloaded || connection?.saveData) return;
+  pagesPreloaded = true;
+  const run = () => {
+    const pages = getAdminFlag()
+      ? [
+          loadDashboard,
+          loadNodeHub,
+          loadInbound,
+          loadRelay,
+          loadSubscription,
+          loadUserHub,
+          loadConfig,
+        ]
+      : [loadDashboard, loadMySubscriptions];
+
+    for (const load of pages) void load().catch(() => {});
+  };
+
+  window.setTimeout(() => {
+    if ("requestIdleCallback" in window) window.requestIdleCallback(run);
+    else run();
+  }, 2000);
+}
 
 const ProtectedRoute = ({
   children,
@@ -49,16 +96,21 @@ const ProtectedRoute = ({
 }) => {
   const isH5 = useH5Mode();
   const authenticated = isLoggedIn();
+  const { pathname } = useLocation();
 
   if (!authenticated) {
     return <Navigate replace to="/" />;
   }
 
   // 如果跳过布局，直接返回子组件
+  // Inside the layout, so the menus still work after a page fails; keyed
+  // by path, so moving to another page clears the error.
   const page = (
-    <Suspense fallback={<PageLoadingState message="正在加载..." />}>
-      {children}
-    </Suspense>
+    <ErrorBoundary key={pathname}>
+      <Suspense fallback={<PageLoadingState message="正在加载..." />}>
+        {children}
+      </Suspense>
+    </ErrorBoundary>
   );
 
   if (skipLayout) {
@@ -95,6 +147,10 @@ function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const { effectiveMode } = useThemeContext();
+
+  useEffect(() => {
+    if (isLoggedIn()) preloadPages();
+  }, [location.pathname]);
 
   // 全局登录状态监听，当检测到未登录且不在首页时，跳转到首页
   useEffect(() => {
@@ -177,148 +233,149 @@ function App() {
     };
   }, []);
 
+  // No key and no exit animation: the layout stays mounted across pages
+  // and the next page mounts (and starts loading) right away, instead of
+  // after the old one has animated out.
   return (
-    <AnimatePresence mode="wait">
-      <Routes key={location.pathname} location={location}>
-        <Route element={<LoginRoute />} path="/" />
-        <Route
-          element={
-            <Suspense fallback={<PageLoadingState message="正在加载..." />}>
-              <GithubCallbackPage />
-            </Suspense>
-          }
-          path="/github-callback"
-        />
-        <Route
-          element={
-            <ProtectedRoute skipLayout={true}>
-              <ChangePasswordPage />
-            </ProtectedRoute>
-          }
-          path="/change-password"
-        />
-        <Route
-          element={
-            <ProtectedRoute>
-              <DashboardPage />
-            </ProtectedRoute>
-          }
-          path="/dashboard"
-        />
-        <Route
-          element={
-            <ProtectedRoute>
-              <MonitorPage />
-            </ProtectedRoute>
-          }
-          path="/monitor"
-        />
-        <Route
-          element={
-            <ProtectedRoute>
-              <ForwardPage />
-            </ProtectedRoute>
-          }
-          path="/forward"
-        />
-        <Route
-          element={
-            <ProtectedRoute>
-              <MySubscriptionsPage />
-            </ProtectedRoute>
-          }
-          path="/my-subscriptions"
-        />
-        <Route
-          element={
-            <ProtectedRoute>
-              <TunnelPage />
-            </ProtectedRoute>
-          }
-          path="/tunnel"
-        />
-        <Route
-          element={
-            <ProtectedRoute>
-              <NodePage />
-            </ProtectedRoute>
-          }
-          path="/node"
-        />
-        <Route
-          element={
-            <ProtectedRoute useSimpleLayout={true}>
-              <UserHubPage />
-            </ProtectedRoute>
-          }
-          path="/user"
-        />
-        <Route
-          element={
-            <ProtectedRoute useSimpleLayout={true}>
-              <UserHubPage />
-            </ProtectedRoute>
-          }
-          path="/group"
-        />
-        <Route
-          element={
-            <ProtectedRoute>
-              <ProfilePage />
-            </ProtectedRoute>
-          }
-          path="/profile"
-        />
-        <Route
-          element={
-            <ProtectedRoute useSimpleLayout={true}>
-              <UserHubPage />
-            </ProtectedRoute>
-          }
-          path="/limit"
-        />
-        <Route
-          element={
-            <ProtectedRoute>
-              <InboundPage />
-            </ProtectedRoute>
-          }
-          path="/inbound"
-        />
-        <Route
-          element={
-            <ProtectedRoute>
-              <RelayPage />
-            </ProtectedRoute>
-          }
-          path="/relay"
-        />
-        <Route
-          element={
-            <ProtectedRoute>
-              <SubscriptionPage />
-            </ProtectedRoute>
-          }
-          path="/subscription"
-        />
-        <Route
-          element={
-            <ProtectedRoute>
-              <ConfigPage />
-            </ProtectedRoute>
-          }
-          path="/config"
-        />
-        <Route
-          element={
-            <ProtectedRoute useSimpleLayout={true}>
-              <PanelSharingPage />
-            </ProtectedRoute>
-          }
-          path="/panel-sharing"
-        />
-      </Routes>
-    </AnimatePresence>
+    <Routes location={location}>
+      <Route element={<LoginRoute />} path="/" />
+      <Route
+        element={
+          <Suspense fallback={<PageLoadingState message="正在加载..." />}>
+            <GithubCallbackPage />
+          </Suspense>
+        }
+        path="/github-callback"
+      />
+      <Route
+        element={
+          <ProtectedRoute skipLayout={true}>
+            <ChangePasswordPage />
+          </ProtectedRoute>
+        }
+        path="/change-password"
+      />
+      <Route
+        element={
+          <ProtectedRoute>
+            <DashboardPage />
+          </ProtectedRoute>
+        }
+        path="/dashboard"
+      />
+      <Route
+        element={
+          <ProtectedRoute>
+            <MonitorPage />
+          </ProtectedRoute>
+        }
+        path="/monitor"
+      />
+      <Route
+        element={
+          <ProtectedRoute>
+            <ForwardPage />
+          </ProtectedRoute>
+        }
+        path="/forward"
+      />
+      <Route
+        element={
+          <ProtectedRoute>
+            <MySubscriptionsPage />
+          </ProtectedRoute>
+        }
+        path="/my-subscriptions"
+      />
+      <Route
+        element={
+          <ProtectedRoute>
+            <TunnelPage />
+          </ProtectedRoute>
+        }
+        path="/tunnel"
+      />
+      <Route
+        element={
+          <ProtectedRoute>
+            <NodePage />
+          </ProtectedRoute>
+        }
+        path="/node"
+      />
+      <Route
+        element={
+          <ProtectedRoute useSimpleLayout={true}>
+            <UserHubPage />
+          </ProtectedRoute>
+        }
+        path="/user"
+      />
+      <Route
+        element={
+          <ProtectedRoute useSimpleLayout={true}>
+            <UserHubPage />
+          </ProtectedRoute>
+        }
+        path="/group"
+      />
+      <Route
+        element={
+          <ProtectedRoute>
+            <ProfilePage />
+          </ProtectedRoute>
+        }
+        path="/profile"
+      />
+      <Route
+        element={
+          <ProtectedRoute useSimpleLayout={true}>
+            <UserHubPage />
+          </ProtectedRoute>
+        }
+        path="/limit"
+      />
+      <Route
+        element={
+          <ProtectedRoute>
+            <InboundPage />
+          </ProtectedRoute>
+        }
+        path="/inbound"
+      />
+      <Route
+        element={
+          <ProtectedRoute>
+            <RelayPage />
+          </ProtectedRoute>
+        }
+        path="/relay"
+      />
+      <Route
+        element={
+          <ProtectedRoute>
+            <SubscriptionPage />
+          </ProtectedRoute>
+        }
+        path="/subscription"
+      />
+      <Route
+        element={
+          <ProtectedRoute>
+            <ConfigPage />
+          </ProtectedRoute>
+        }
+        path="/config"
+      />
+      <Route
+        element={
+          <ProtectedRoute useSimpleLayout={true}>
+            <PanelSharingPage />
+          </ProtectedRoute>
+        }
+        path="/panel-sharing"
+      />
+    </Routes>
   );
 }
 

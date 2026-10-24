@@ -1109,7 +1109,7 @@ export function MonitorView({
       monitorForm.type === "icmp" &&
       (!monitorForm.nodeId || monitorForm.nodeId <= 0)
     ) {
-      toast.error("ICMP 监控必须选择执行节点");
+      toast.error("ICMP 监控必须选择执行服务器");
 
       return;
     }
@@ -1931,7 +1931,10 @@ export function MonitorView({
         }}
       >
         <ModalContent>
-          <ModalHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <ModalHeader
+            closable
+            className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+          >
             <div className="min-w-0">
               <div className="text-base font-semibold truncate">
                 监控记录
@@ -1939,7 +1942,7 @@ export function MonitorView({
               </div>
               {resultsMonitor?.nodeId && resultsMonitor.nodeId > 0 ? (
                 <div className="text-xs text-default-500 truncate">
-                  节点:{" "}
+                  服务器:{" "}
                   {nodeMap.get(resultsMonitor.nodeId)?.name ||
                     resultsMonitor.nodeId}
                 </div>
@@ -2039,17 +2042,6 @@ export function MonitorView({
               </div>
             )}
           </ModalBody>
-          <ModalFooter>
-            <Button
-              variant="flat"
-              onPress={() => {
-                setResultsModalOpen(false);
-                setResultsMonitorId(null);
-              }}
-            >
-              关闭
-            </Button>
-          </ModalFooter>
         </ModalContent>
       </Modal>
 
@@ -2156,7 +2148,7 @@ export function MonitorView({
               />
             </div>
             <Select
-              label="执行节点"
+              label="执行服务器"
               selectedKeys={
                 monitorForm.type === "icmp"
                   ? monitorForm.nodeId
@@ -2191,7 +2183,7 @@ export function MonitorView({
             </div>
           </ModalBody>
           <ModalFooter>
-            <Button variant="flat" onPress={() => setEditModalOpen(false)}>
+            <Button variant="light" onPress={() => setEditModalOpen(false)}>
               取消
             </Button>
             <Button

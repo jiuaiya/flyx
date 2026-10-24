@@ -44,9 +44,11 @@ export function NodeFilterModal({
       onOpenChange={setIsFilterModalOpen}
     >
       <ModalContent>
-        {(onClose) => (
+        {() => (
           <>
-            <ModalHeader className="flex flex-col gap-1">筛选条件</ModalHeader>
+            <ModalHeader closable className="flex flex-col gap-1">
+              筛选条件
+            </ModalHeader>
             <ModalBody>
               <div className="flex flex-col gap-4 py-2">
                 <div className="flex flex-col gap-2">
@@ -64,7 +66,7 @@ export function NodeFilterModal({
                       setNodeFilterMode(selected || "all");
                     }}
                   >
-                    <SelectItem key="all">全部节点</SelectItem>
+                    <SelectItem key="all">全部服务器</SelectItem>
                     <SelectItem key="expiringSoon">
                       7天内续费 ({nodeExpiryStats.expiringSoon})
                     </SelectItem>
@@ -85,9 +87,6 @@ export function NodeFilterModal({
                 onPress={resetNodeFilterMode}
               >
                 重置
-              </Button>
-              <Button color="primary" onPress={onClose}>
-                完成
               </Button>
             </ModalFooter>
           </>

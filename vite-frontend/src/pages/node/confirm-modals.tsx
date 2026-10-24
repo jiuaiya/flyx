@@ -44,11 +44,12 @@ export function RollbackNodeModal({
             </ModalHeader>
             <ModalBody>
               <p>
-                确定要将节点 <strong>&quot;{nodeToRollback?.name}&quot;</strong>{" "}
+                确定要将服务器{" "}
+                <strong>&quot;{nodeToRollback?.name}&quot;</strong>{" "}
                 回退到上一个版本吗？
               </p>
               <p className="text-small text-default-500">
-                节点将执行版本回退并自动重启，期间会导致节点短暂离线。
+                服务器将执行版本回退并自动重启，期间会导致服务器短暂离线。
               </p>
             </ModalBody>
             <ModalFooter>
@@ -56,7 +57,7 @@ export function RollbackNodeModal({
                 取消
               </Button>
               <Button color="secondary" onPress={confirmRollback}>
-                确认回退
+                回退
               </Button>
             </ModalFooter>
           </>
@@ -102,8 +103,8 @@ export function DeleteNodeModal({
             </ModalHeader>
             <ModalBody>
               <p>
-                确定要删除节点 <strong>&quot;{nodeToDelete?.name}&quot;</strong>{" "}
-                吗？
+                确定要删除服务器{" "}
+                <strong>&quot;{nodeToDelete?.name}&quot;</strong> 吗？
               </p>
               <p className="text-small text-default-500">
                 此操作不可恢复，请谨慎操作。
@@ -118,7 +119,7 @@ export function DeleteNodeModal({
                 isLoading={deleteLoading}
                 onPress={confirmDelete}
               >
-                {deleteLoading ? "删除中..." : "确认删除"}
+                {deleteLoading ? "删除中..." : "删除"}
               </Button>
             </ModalFooter>
           </>
@@ -164,7 +165,8 @@ export function BatchDeleteNodesModal({
             </ModalHeader>
             <ModalBody>
               <p>
-                确定要删除选中的 <strong>{selectedIds.size}</strong> 个节点吗？
+                确定要删除选中的 <strong>{selectedIds.size}</strong>{" "}
+                个服务器吗？
               </p>
               <p className="text-small text-default-500">
                 此操作不可恢复，请谨慎操作。
@@ -179,7 +181,7 @@ export function BatchDeleteNodesModal({
                 isLoading={batchLoading}
                 onPress={handleBatchDelete}
               >
-                {batchLoading ? "删除中..." : "确认删除"}
+                {batchLoading ? "删除中..." : "删除"}
               </Button>
             </ModalFooter>
           </>

@@ -43,6 +43,11 @@ import {
   previewTunnelDelete,
 } from "@/api";
 import { PageLoadingState } from "@/components/page-state";
+import {
+  markPageCached,
+  pageCached,
+  useCachedState,
+} from "@/hooks/use-cached-state";
 import { ActionSheet } from "@/components/action-sheet";
 import {
   EmptyHint,
@@ -95,15 +100,22 @@ import {
 } from "@/pages/tunnel/delete-modals";
 import { TunnelDiagnosisModal } from "@/pages/tunnel/diagnosis-modal";
 
+// A revisit shows the last data at once and reloads in the background.
+const PAGE = "tunnel";
+
 export default function TunnelPage({
   embedded = false,
 }: {
   embedded?: boolean;
 }) {
   const [loading, setLoading] = useState(true);
-  const [tunnels, setTunnels] = useState<Tunnel[]>([]);
-  const [tunnelOrder, setTunnelOrder] = useState<number[]>([]);
-  const [nodes, setNodes] = useState<Node[]>([]);
+  const [tunnels, setTunnels] = useCachedState<Tunnel[]>(PAGE, "tunnels", []);
+  const [tunnelOrder, setTunnelOrder] = useCachedState<number[]>(
+    PAGE,
+    "tunnelOrder",
+    [],
+  );
+  const [nodes, setNodes] = useCachedState<Node[]>(PAGE, "nodes", []);
   const [searchKeyword, setSearchKeyword] = useLocalStorageState(
     "tunnel-search-keyword",
     "",
@@ -256,6 +268,7 @@ export default function TunnelPage({
 
         if (tunnelsRes.code === 0) {
           applyTunnelList(mapTunnelApiItems(tunnelsRes.data || []));
+          markPageCached(PAGE);
         } else {
           toast.error(tunnelsRes.msg || "获取隧道列表失败");
         }
@@ -456,7 +469,7 @@ export default function TunnelPage({
 
         if ((deleteResult?.warnings?.length ?? 0) > 0) {
           toast.success(
-            `删除成功，另有 ${deleteResult?.warnings?.length ?? 0} 条节点清理提示`,
+            `删除成功，另有 ${deleteResult?.warnings?.length ?? 0} 条服务器清理提示`,
           );
         } else {
           toast.success("删除成功");
@@ -1051,7 +1064,7 @@ export default function TunnelPage({
         if (result.failCount === 0) {
           toast.success(
             warningCount > 0
-              ? `成功删除 ${result.successCount} 项，另有 ${warningCount} 条节点清理提示`
+              ? `成功删除 ${result.successCount} 项，另有 ${warningCount} 条服务器清理提示`
               : `成功删除 ${result.successCount} 项`,
           );
           setBatchProgress({
@@ -1437,7 +1450,7 @@ export default function TunnelPage({
   const addAction = { key: "add", label: "新建隧道", onPress: handleAdd };
   const sheetTunnel = tunnels.find((t) => t.id === sheetTunnelId) ?? null;
 
-  if (loading) {
+  if (loading && !pageCached(PAGE)) {
     return <PageLoadingState message="正在加载..." />;
   }
 
@@ -1516,7 +1529,7 @@ export default function TunnelPage({
       {tunnels.length === 0 ? (
         <EmptyHint
           action={addAction}
-          text="还没有隧道。新建一条，选好入口和出口节点，就能在上面添加转发规则"
+          text="还没有隧道。新建一条，选好入口和出口服务器，就能在上面添加转发规则"
         />
       ) : sortedTunnels.length === 0 ? (
         <EmptyHint text="没有匹配的隧道" />

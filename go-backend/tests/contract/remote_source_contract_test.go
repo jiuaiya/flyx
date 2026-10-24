@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -25,9 +26,11 @@ func TestRemoteSourceContract(t *testing.T) {
 
 	var mu sync.Mutex
 	body := strings.Join([]string{ssLink("203.0.113.1", "8388", "香港 01"), ssLink("203.0.113.2", "8388", "日本 01")}, "\n")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var gotUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
+		gotUA = req.UserAgent()
 		w.Header().Set("Subscription-Userinfo", "upload=1; download=2; total=3; expire=4")
 		_, _ = w.Write([]byte(base64.StdEncoding.EncodeToString([]byte(body))))
 	}))
@@ -41,6 +44,14 @@ func TestRemoteSourceContract(t *testing.T) {
 	if out := kernelContractPost(t, router, admin, "/api/v1/subscription/source/save", `{"name":"机场","url":"ftp://x"}`); out.Code == 0 {
 		t.Fatal("non-http url must be rejected")
 	}
+	// The test server is on loopback: refused until the panel allows it.
+	if out := kernelContractPost(t, router, admin, "/api/v1/subscription/source/save",
+		`{"name":"机场","url":"`+srv.URL+`"}`); out.Code == 0 || !strings.Contains(out.Msg, "拉取订阅可访问内网地址") {
+		t.Fatalf("loopback source must be refused: %+v", out)
+	}
+	if err := r.UpsertConfig("fetch_allow_local", "true", time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
 	out := kernelContractPost(t, router, admin, "/api/v1/subscription/source/save",
 		`{"name":"机场","url":"`+srv.URL+`","intervalHours":12}`)
 	data := out.Data.(map[string]interface{})
@@ -50,16 +61,34 @@ func TestRemoteSourceContract(t *testing.T) {
 		t.Fatalf("create: %+v", out)
 	}
 	hk := mustQueryInt64(t, r, `SELECT id FROM node_inbound WHERE name = '香港 01' AND source_id = ?`, srcID)
+	if gotUA != "clash.meta/1.19.0" || src["userAgent"] != "" {
+		t.Fatalf("default user agent: %q %v", gotUA, src["userAgent"])
+	}
+
+	// A source can send its own User-Agent; changing it fetches again.
+	if out := kernelContractPost(t, router, admin, "/api/v1/subscription/source/save",
+		`{"id":`+jsonInt64(srcID)+`,"name":"机场","url":"`+srv.URL+`","intervalHours":12,"userAgent":"a\nb"}`); out.Code == 0 {
+		t.Fatal("a multi-line user agent must be rejected")
+	}
+	out = kernelContractPost(t, router, admin, "/api/v1/subscription/source/save",
+		`{"id":`+jsonInt64(srcID)+`,"name":"机场","url":"`+srv.URL+`","intervalHours":12,"userAgent":" Shadowrocket/2070 "}`)
+	if out.Code != 0 || gotUA != "Shadowrocket/2070" || out.Data.(map[string]interface{})["source"].(map[string]interface{})["userAgent"] != "Shadowrocket/2070" {
+		t.Fatalf("custom user agent: %q %+v", gotUA, out)
+	}
+	gotUA = ""
+	if out := kernelContractPost(t, router, admin, "/api/v1/subscription/source/refresh", `{"id":`+jsonInt64(srcID)+`}`); out.Code != 0 || gotUA != "Shadowrocket/2070" {
+		t.Fatalf("refresh keeps the user agent: %q %+v", gotUA, out)
+	}
 
 	// Inbound list names the source; a subscription can take the whole source.
 	list := kernelContractPost(t, router, admin, "/api/v1/inbound/list", `{}`).Data.([]interface{})
 	if len(list) != 2 || list[0].(map[string]interface{})["sourceName"] != "机场" {
 		t.Fatalf("inbound list: %v", list)
 	}
-	sub := kernelContractPost(t, router, admin, "/api/v1/subscription/save",
-		`{"name":"合并","sourceAll":false,"inboundIds":[],"sourceIds":[`+jsonInt64(srcID)+`]}`)
+	group := saveNodeGroup(t, router, admin, `{"name":"机场","sourceAll":false,"inboundIds":[],"sourceIds":[`+jsonInt64(srcID)+`]}`)
+	sub := kernelContractPost(t, router, admin, "/api/v1/subscription/save", `{"name":"合并","groupIds":[`+jsonInt64(group)+`]}`)
 	subView := sub.Data.(map[string]interface{})
-	if sub.Code != 0 || valueAsInt(subView["nodeCount"]) != 2 || len(subView["inboundIds"].([]interface{})) != 0 {
+	if sub.Code != 0 || valueAsInt(subView["nodeCount"]) != 2 {
 		t.Fatalf("subscription from source: %+v", sub)
 	}
 
@@ -130,10 +159,13 @@ func TestFileSourceChainContract(t *testing.T) {
 		t.Fatal("a file source is not refreshed from a URL")
 	}
 
-	sub := kernelContractPost(t, router, admin, "/api/v1/subscription/save", `{"name":"链式","sourceAll":false,"inboundIds":[],"sourceIds":[],"options":{`+
+	// The chain picks relays and landings among its node groups' nodes.
+	landingID := jsonInt64(int64(landing["id"].(float64)))
+	chainGroup := jsonInt64(saveNodeGroup(t, router, admin, `{"name":"机场+落地","sourceIds":[`+airportID+`,`+landingID+`]}`))
+	sub := kernelContractPost(t, router, admin, "/api/v1/subscription/save", `{"name":"链式","groupIds":[`+chainGroup+`],"options":{`+
 		`"chainRelaySources":[`+airportID+`],"chainLandingSources":[`+jsonInt64(int64(landing["id"].(float64)))+`],"chainNoneNames":["日本 01"],"chainHideRelays":true}}`)
 	if sub.Code != 0 || valueAsInt(sub.Data.(map[string]interface{})["nodeCount"]) != 3 {
-		t.Fatalf("chain sources join the subscription: %+v", sub)
+		t.Fatalf("chain over the group's nodes: %+v", sub)
 	}
 	path := sub.Data.(map[string]interface{})["path"].(string)
 	check := func(relay string) {
@@ -171,7 +203,7 @@ func TestFileSourceChainContract(t *testing.T) {
 	check("香港 01 2x")
 
 	// Only the airport's 香港 nodes relay; the rest of it is left out.
-	sub = kernelContractPost(t, router, admin, "/api/v1/subscription/save", `{"name":"香港前置","sourceAll":false,"inboundIds":[],"sourceIds":[],"options":{`+
+	sub = kernelContractPost(t, router, admin, "/api/v1/subscription/save", `{"name":"香港前置","groupIds":[`+chainGroup+`],"options":{`+
 		`"chainRelaySources":[`+airportID+`],"chainLandingSources":[`+jsonInt64(int64(landing["id"].(float64)))+`],`+
 		`"chainSourceFilters":{"`+airportID+`":"香港","999":"ignored"},"chainDropUnused":true}}`)
 	if sub.Code != 0 {

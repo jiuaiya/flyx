@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { toast } from "react-hot-toast";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { LogOut, UserRound } from "lucide-react";
 
 import { Button } from "@/shadcn-bridge/heroui/button";
@@ -86,12 +86,12 @@ export default function AdminLayout({
     {
       path: "/node",
       section: "线路",
-      label: "节点",
+      label: "服务器",
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path
             clipRule="evenodd"
-            d="M3 3a1 1 0 000 2v8a2 2 0 002 2h2.586l-1.293 1.293a1 1 0 101.414 1.414L10 15.414l2.293 2.293a1 1 0 001.414-1.414L12.414 15H15a2 2 0 002-2V5a1 1 0 100-2H3zm11.707 4.707a1 1 0 00-1.414-1.414L10 9.586 8.707 8.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8 10.414l1.293 1.293a1 1 0 001.414 0l4-4z"
+            d="M2 5a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2V5zm14 1a1 1 0 11-2 0 1 1 0 012 0zM2 13a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2v-2zm14 1a1 1 0 11-2 0 1 1 0 012 0z"
             fillRule="evenodd"
           />
         </svg>
@@ -100,12 +100,12 @@ export default function AdminLayout({
     },
     {
       path: "/inbound",
-      label: "落地",
+      label: "节点",
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path
             clipRule="evenodd"
-            d="M2 5a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2V5zm14 1a1 1 0 11-2 0 1 1 0 012 0zM2 13a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2v-2zm14 1a1 1 0 11-2 0 1 1 0 012 0z"
+            d="M4.083 9h1.946c.089-1.546.383-2.97.837-4.118A6.004 6.004 0 004.083 9zM10 2a8 8 0 100 16 8 8 0 000-16zm0 2c-.076 0-.232.032-.465.262-.238.234-.497.623-.737 1.182-.389.907-.673 2.142-.766 3.556h3.936c-.093-1.414-.377-2.649-.766-3.556-.24-.56-.5-.948-.737-1.182C10.232 4.032 10.076 4 10 4zm3.971 5c-.089-1.546-.383-2.97-.837-4.118A6.004 6.004 0 0115.917 9h-1.946zm-2.003 2H8.032c.093 1.414.377 2.649.766 3.556.24.56.5.948.737 1.182.233.23.389.262.465.262.076 0 .232-.032.465-.262.238-.234.498-.623.737-1.182.389-.907.673-2.142.766-3.556zm1.166 4.118c.454-1.147.748-2.572.837-4.118h1.946a6.004 6.004 0 01-2.783 4.118zm-6.268 0C6.412 13.97 6.118 12.546 6.03 11H4.083a6.004 6.004 0 002.783 4.118z"
             fillRule="evenodd"
           />
         </svg>
@@ -241,6 +241,15 @@ export default function AdminLayout({
       setMobileMenuVisible(false);
     }
   }, [isMobile]);
+
+  // The layout now stays mounted across pages: start each page at the top
+  // and with the mobile menu closed, as a fresh layout did.
+  const mainRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    mainRef.current?.scrollTo(0, 0);
+    setMobileMenuVisible(false);
+  }, [location.pathname]);
 
   // 退出登录
   const handleLogout = () => {
@@ -541,19 +550,18 @@ export default function AdminLayout({
         )}
 
         {/* 主内容 */}
-        <main className="flex-1 overflow-y-auto scrollbar-hide">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={location.pathname}
-              animate={{ opacity: 1, y: 0 }}
-              className="h-full"
-              exit={{ opacity: 0, y: -6 }}
-              initial={{ opacity: 0, y: 10 }}
-              transition={{ duration: 0.22, ease: [0.25, 0.46, 0.45, 0.94] }}
-            >
-              {children}
-            </motion.div>
-          </AnimatePresence>
+        <main ref={mainRef} className="flex-1 overflow-y-auto scrollbar-hide">
+          {/* Enter animation only: an exit animation would hold the next
+              page back until the old one is gone. */}
+          <motion.div
+            key={location.pathname}
+            animate={{ opacity: 1, y: 0 }}
+            className="h-full"
+            initial={{ opacity: 0, y: 10 }}
+            transition={{ duration: 0.22, ease: [0.25, 0.46, 0.45, 0.94] }}
+          >
+            {children}
+          </motion.div>
         </main>
       </div>
     </div>

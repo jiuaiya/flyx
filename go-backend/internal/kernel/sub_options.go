@@ -74,6 +74,9 @@ type SubOptions struct {
 	// (TemplateClash, ...; see sub_template.go). A format with a template
 	// renders into it instead of the built-in profile and rules.
 	Templates map[string]string
+	// Notices are placeholder nodes put first, after the other steps (see
+	// sub_notice.go): info nodes, or why the subscription stopped working.
+	Notices []string
 }
 
 // RegionOther is the filter value for names without a recognized region.
@@ -258,6 +261,13 @@ func ParseRenameRules(text string) ([]renameRule, error) {
 // ApplySubOptions runs the pipeline. Invalid expressions are skipped
 // (they are validated when saved).
 func ApplySubOptions(endpoints []Endpoint, opts SubOptions) []Endpoint {
+	return markChain(ProcessNodes(endpoints, opts), opts)
+}
+
+// ProcessNodes runs the node steps of the pipeline (filter, rename, flag,
+// prefix, dedupe, sort, script) without the chain: a node group's part.
+// Original keeps the name from before, which the chain picks nodes by.
+func ProcessNodes(endpoints []Endpoint, opts SubOptions) []Endpoint {
 	endpoints = FilterEndpoints(endpoints, opts)
 	rules, _ := ParseRenameRules(opts.Rename)
 	out := make([]Endpoint, 0, len(endpoints))
@@ -299,7 +309,7 @@ func ApplySubOptions(endpoints []Endpoint, opts SubOptions) []Endpoint {
 	if scripted, err := ApplySubScript(out, opts.Script); err == nil {
 		out = scripted
 	}
-	return markChain(out, opts)
+	return out
 }
 
 // SubScriptError is the error the subscription's script gives on these

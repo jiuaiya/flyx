@@ -29,7 +29,6 @@ import {
 } from "lucide-react";
 
 import { formatTraffic } from "@/utils/traffic";
-import { Button } from "@/shadcn-bridge/heroui/button";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
 import { Alert } from "@/shadcn-bridge/heroui/alert";
 import { Progress } from "@/shadcn-bridge/heroui/progress";
@@ -53,7 +52,7 @@ import {
 } from "@/api";
 import { LatencyCell, probePoints } from "@/components/latency-cell";
 import { RouteModal } from "@/components/route-modal";
-import { LatencyTrendModal } from "@/components/latency-trend-modal";
+import { LatencyTrendModal } from "@/components/lazy-charts";
 import { LatencyTargetsModal } from "@/pages/node/latency-targets-modal";
 import { PageLoadingState } from "@/components/page-state";
 import { ActionSheet } from "@/components/action-sheet";
@@ -63,6 +62,7 @@ import {
   PageShell,
   PageTabs,
   PageToolbar,
+  ToolbarButton,
   SelectionBar,
 } from "@/components/page-kit";
 import { CARD_GRID } from "@/components/info-card";
@@ -76,6 +76,11 @@ import {
 import { buildNodeSystemInfo } from "@/pages/node/system-info";
 import { useNodeOfflineTimers } from "@/pages/node/use-node-offline-timers";
 import { useNodeRealtime } from "@/pages/node/use-node-realtime";
+import {
+  markPageCached,
+  pageCached,
+  useCachedState,
+} from "@/hooks/use-cached-state";
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
 import { latestProbe } from "@/utils/latest-probe";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
@@ -111,6 +116,8 @@ import {
   type NodeCardAction,
 } from "@/pages/node/status-card";
 
+const PAGE = "node";
+
 export default function NodePage({
   embedded = false,
   addRequest = 0,
@@ -122,9 +129,11 @@ export default function NodePage({
   /** Opens a node's history charts and service monitors. */
   onOpenMonitor?: (nodeId: number) => void;
 }) {
-  const [nodeList, setNodeList] = useState<Node[]>([]);
-  const [nodeOrder, setNodeOrder] = useState<number[]>([]);
-  const [loading, setLoading] = useState(true);
+  // A revisit shows the last data at once and reloads in the background;
+  // live metrics then arrive over the WebSocket as usual.
+  const [nodeList, setNodeList] = useCachedState<Node[]>(PAGE, "nodes", []);
+  const [nodeOrder, setNodeOrder] = useCachedState<number[]>(PAGE, "order", []);
+  const [loading, setLoading] = useState(() => !pageCached(PAGE));
   const [localSearchKeyword, setLocalSearchKeyword] = useLocalStorageState(
     "node-search-keyword-local",
     "",
@@ -194,7 +203,7 @@ export default function NodePage({
   const protocolControlsDisabled = protocolDisabled || isNftablesMode;
   const protocolControlsReason = isNftablesMode
     ? "nftables 模式不支持 agent 协议开关"
-    : protocolDisabledReason || "等待节点上线后再设置";
+    : protocolDisabledReason || "等待服务器上线后再设置";
 
   const [selectMode, setSelectMode] = useState(false);
   const [sheetNodeId, setSheetNodeId] = useState<number | null>(null);
@@ -334,6 +343,7 @@ export default function NodePage({
           copyLoading: false,
         }));
 
+        markPageCached(PAGE);
         setNodeList((prev) => {
           const previousById = new Map(prev.map((node) => [node.id, node]));
 
@@ -363,7 +373,7 @@ export default function NodePage({
         }
       } else {
         if (!silent) {
-          toast.error(res.msg || "加载节点列表失败");
+          toast.error(res.msg || "加载服务器列表失败");
         }
       }
     } catch {
@@ -495,7 +505,8 @@ export default function NodePage({
   });
 
   useEffect(() => {
-    loadNodes();
+    // With cached data on screen, reload without the loading state.
+    loadNodes({ silent: pageCached(PAGE) });
     loadRemoteUsage();
   }, [loadNodes, loadRemoteUsage]);
 
@@ -533,13 +544,13 @@ export default function NodePage({
 
   const formatChainType = (chainType: number, hopInx: number) => {
     if (chainType === 1) {
-      return "入口节点";
+      return "入口服务器";
     }
     if (chainType === 2) {
       return `中继跳点 #${hopInx}`;
     }
     if (chainType === 3) {
-      return "出口节点";
+      return "出口服务器";
     }
 
     return "未知链路";
@@ -634,11 +645,11 @@ export default function NodePage({
     const newErrors: Record<string, string> = {};
 
     if (!form.name.trim()) {
-      newErrors.name = "请输入节点名称";
+      newErrors.name = "请输入服务器名称";
     } else if (form.name.trim().length < 2) {
-      newErrors.name = "节点名称长度至少2位";
+      newErrors.name = "服务器名称长度至少2位";
     } else if (form.name.trim().length > 50) {
-      newErrors.name = "节点名称长度不能超过50位";
+      newErrors.name = "服务器名称长度不能超过50位";
     }
 
     if (
@@ -704,12 +715,12 @@ export default function NodePage({
 
   // 新增节点
   const handleAdd = () => {
-    setDialogTitle("新增节点");
+    setDialogTitle("新增服务器");
     setIsEdit(false);
     setDialogVisible(true);
     resetForm();
     setProtocolDisabled(true);
-    setProtocolDisabledReason("节点未在线，等待节点上线后再设置");
+    setProtocolDisabledReason("服务器未在线，等待服务器上线后再设置");
   };
 
   useEffect(() => {
@@ -719,7 +730,7 @@ export default function NodePage({
 
   // 编辑节点
   const handleEdit = (node: Node) => {
-    setDialogTitle("编辑节点");
+    setDialogTitle("编辑服务器");
     setIsEdit(true);
 
     const legacy = (node.serverIp || "").trim();
@@ -764,7 +775,7 @@ export default function NodePage({
       node.forwardMode === "nftables"
         ? "nftables 模式不支持 agent 协议开关"
         : offline
-          ? "节点未在线，等待节点上线后再设置"
+          ? "服务器未在线，等待服务器上线后再设置"
           : "",
     );
     setDialogVisible(true);
@@ -915,7 +926,7 @@ export default function NodePage({
         );
 
         if (res.code === 0) {
-          toast.success(`节点升级命令已发送，节点将自动重启`);
+          toast.success(`服务器升级命令已发送，服务器将自动重启`);
         } else {
           toast.error(res.msg || "升级失败");
         }
@@ -936,7 +947,7 @@ export default function NodePage({
       });
 
       if (selectedLocalIds.length === 0) {
-        toast.error("请选择本地节点进行升级");
+        toast.error("请选择本地服务器进行升级");
         setUpgradeModalOpen(false);
 
         return;
@@ -953,7 +964,7 @@ export default function NodePage({
 
         if (res.code === 0) {
           toast.success(
-            `批量升级命令已发送到 ${selectedLocalIds.length} 个节点`,
+            `批量升级命令已发送到 ${selectedLocalIds.length} 个服务器`,
           );
         } else {
           toast.error(res.msg || "批量升级失败");
@@ -984,7 +995,7 @@ export default function NodePage({
       const res = await rollbackNode(node.id);
 
       if (res.code === 0) {
-        toast.success(`节点 ${node.name} 回退命令已发送，节点将自动重启`);
+        toast.success(`服务器 ${node.name} 回退命令已发送，服务器将自动重启`);
       } else {
         toast.error(res.msg || "回退失败");
       }
@@ -1160,7 +1171,7 @@ export default function NodePage({
       node.latencyTargets?.points.length === 0 ? (
         <button
           className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-500 hover:text-default-700"
-          title="这台节点没选测试点，点此设置"
+          title="这台服务器没选测试点，点此设置"
           type="button"
           onClick={(e) => {
             e.stopPropagation();
@@ -1283,7 +1294,7 @@ export default function NodePage({
       const res = await batchDeleteNodes(Array.from(selectedIds));
 
       if (res.code === 0) {
-        toast.success(`成功删除 ${selectedIds.size} 个节点`);
+        toast.success(`成功删除 ${selectedIds.size} 个服务器`);
         setNodeList((prev) => prev.filter((n) => !selectedIds.has(n.id)));
         setSelectedIds(new Set());
         setBatchDeleteModalOpen(false);
@@ -1464,16 +1475,16 @@ export default function NodePage({
     <PageShell embedded={embedded}>
       {!embedded && (
         <PageHeader
-          description="装了 agent 的服务器，用来搭建落地和中转"
-          primary={{ key: "add", label: "新建节点", onPress: handleAdd }}
-          title="节点"
+          description="装了 agent 的机器：搭建节点和中转、看状态和监控"
+          primary={{ key: "add", label: "新建服务器", onPress: handleAdd }}
+          title="服务器"
         />
       )}
       {remoteNodes.length > 0 && (
         <PageTabs
           tabs={[
-            { key: "local", label: "本地节点", badge: localNodes.length },
-            { key: "remote", label: "远程节点", badge: remoteNodes.length },
+            { key: "local", label: "本地服务器", badge: localNodes.length },
+            { key: "remote", label: "远程服务器", badge: remoteNodes.length },
           ]}
           value={activeTab}
           onChange={setActiveTab}
@@ -1539,21 +1550,18 @@ export default function NodePage({
             },
           ]}
           placeholder={
-            activeTab === "remote" ? "搜索远程节点名称或 IP" : "搜索名称或 IP"
+            activeTab === "remote" ? "搜索远程服务器名称或 IP" : "搜索名称或 IP"
           }
           search={currentSearchKeyword}
           onSearch={setCurrentSearchKeyword}
         >
           {canUseExpiryFilter && (
-            <Button
-              className="shrink-0"
-              color={nodeFilterMode !== "all" ? "primary" : "default"}
-              size="sm"
-              variant="flat"
+            <ToolbarButton
+              active={nodeFilterMode !== "all"}
               onPress={() => setIsFilterModalOpen(true)}
             >
               {nodeFilterMode !== "all" ? "已筛选" : "筛选"}
-            </Button>
+            </ToolbarButton>
           )}
         </PageToolbar>
       )}
@@ -1577,17 +1585,17 @@ export default function NodePage({
         <PageLoadingState message="正在加载..." />
       ) : nodeList.length === 0 ? (
         <EmptyHint
-          action={{ key: "add", label: "新建节点", onPress: handleAdd }}
-          text="还没有节点。新建后在服务器上运行安装命令，节点就会连上面板"
+          action={{ key: "add", label: "新建服务器", onPress: handleAdd }}
+          text="还没有服务器。新建后在服务器上运行安装命令，服务器就会连上面板"
         />
       ) : displayNodes.length === 0 ? (
         <EmptyHint
           text={
             isDisplayFiltered
-              ? "没有匹配的节点"
+              ? "没有匹配的服务器"
               : activeTab === "remote"
-                ? "暂无远程节点"
-                : "暂无本地节点"
+                ? "暂无远程服务器"
+                : "暂无本地服务器"
           }
         />
       ) : (
@@ -1878,7 +1886,7 @@ export default function NodePage({
             subtitle={
               node &&
               (isRemoteNode
-                ? "远程节点"
+                ? "远程服务器"
                 : online
                   ? "在线"
                   : "离线 · agent 没有连上面板")

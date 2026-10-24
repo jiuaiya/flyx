@@ -3,6 +3,11 @@ import type { InboundApiItem, InboundRelayApiItem } from "@/api/types";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
+import {
+  markPageCached,
+  pageCached,
+  useCachedState,
+} from "@/hooks/use-cached-state";
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
 import { latestProbe } from "@/utils/latest-probe";
 import { getInboundList, getInboundRelays, probeInboundRelays } from "@/api";
@@ -13,14 +18,14 @@ import {
   PageHeader,
   PageTabs,
   PageToolbar,
+  ToolbarButton,
 } from "@/components/page-kit";
 import { RelayLatencyCell } from "@/components/relay-latency";
 import ForwardPage from "@/pages/forward";
 import { RelayModal } from "@/pages/inbound/relay-modal";
 import TunnelPage from "@/pages/tunnel";
-import { TunnelMonitorView } from "@/pages/node/tunnel-monitor-view";
+import { TunnelMonitorView } from "@/components/lazy-charts";
 import { RelayLandingCard } from "@/pages/relay/relay-landing-card";
-import { Button } from "@/shadcn-bridge/heroui/button";
 
 type RelayTab = "lines" | "tunnels" | "rules" | "quality";
 
@@ -51,11 +56,22 @@ function QualityView() {
   return <TunnelMonitorView />;
 }
 
+const LINES_PAGE = "relay-lines";
+
 /** Relay lines grouped by the landing they lead to. */
 function LinesView() {
-  const [loading, setLoading] = useState(true);
-  const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
-  const [relays, setRelays] = useState<InboundRelayApiItem[]>([]);
+  // A revisit shows the last data at once and reloads in the background.
+  const [loading, setLoading] = useState(() => !pageCached(LINES_PAGE));
+  const [inbounds, setInbounds] = useCachedState<InboundApiItem[]>(
+    LINES_PAGE,
+    "inbounds",
+    [],
+  );
+  const [relays, setRelays] = useCachedState<InboundRelayApiItem[]>(
+    LINES_PAGE,
+    "relays",
+    [],
+  );
   const [editing, setEditing] = useState<InboundApiItem | null>(null);
   const [onlyWithRelays, setOnlyWithRelays] = useState(false);
   const [query, setQuery] = useState("");
@@ -88,6 +104,7 @@ function LinesView() {
           }));
         });
       }
+      if (inRes.code === 0 && relRes.code === 0) markPageCached(LINES_PAGE);
       if (!silent && (inRes.code !== 0 || relRes.code !== 0))
         toast.error(inRes.msg || relRes.msg || "加载失败");
     } catch {
@@ -183,29 +200,20 @@ function LinesView() {
   return (
     <div className="space-y-3">
       <PageToolbar
-        placeholder="搜索落地名称"
+        placeholder="搜索节点名称"
         search={query}
         onSearch={setQuery}
       >
-        <Button
-          className="shrink-0"
-          color={onlyWithRelays ? "primary" : "default"}
-          size="sm"
-          variant="flat"
+        <ToolbarButton
+          active={onlyWithRelays}
           onPress={() => setOnlyWithRelays((v) => !v)}
         >
           只看有中转的
-        </Button>
+        </ToolbarButton>
         {relays.length > 0 && (
-          <Button
-            className="shrink-0"
-            isLoading={probingIds.size > 0}
-            size="sm"
-            variant="flat"
-            onPress={() => probe([])}
-          >
-            测延迟
-          </Button>
+          <ToolbarButton onPress={() => probe([])}>
+            {probingIds.size > 0 ? "测延迟中…" : "测延迟"}
+          </ToolbarButton>
         )}
       </PageToolbar>
 
@@ -213,9 +221,9 @@ function LinesView() {
         <EmptyHint
           text={
             inbounds.length === 0
-              ? "还没有落地。先在“落地”里搭建或导入节点，再回来对接中转"
+              ? "还没有节点。先在“节点”里搭建或导入，再回来对接中转"
               : query
-                ? "没有匹配的落地"
+                ? "没有匹配的节点"
                 : "还没有中转线路"
           }
         />
@@ -261,7 +269,7 @@ export default function RelayPage() {
   return (
     <AnimatedPage className="px-3 py-6 lg:px-6">
       <PageHeader
-        description="让客户端先连中转再到落地：线路按落地管理，隧道和规则是底层的转发配置"
+        description="让客户端先连中转再到节点：线路按节点管理，隧道和规则是底层的转发配置"
         title="中转"
       />
       <PageTabs tabs={TABS} value={tab} onChange={setTab} />

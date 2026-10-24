@@ -750,7 +750,7 @@ export interface SubPipeline {
   /** Nodes picked for the chain, by their name before the pipeline. */
   chainLandingNames: string[];
   chainRelayNames: string[];
-  /** Whole remote sources in the chain (their nodes join the subscription). */
+  /** Remote sources whose nodes (in the node groups) take a chain role. */
   chainLandingSources: number[];
   chainRelaySources: number[];
   /** Every self-built node is a landing node. */
@@ -767,6 +767,8 @@ export interface SubPipeline {
   script: string;
   /** Subscription template id per client kind; a kind without one gets the built-in profile. */
   templates?: Partial<Record<SubTemplateSlot, number>>;
+  /** Expiry and traffic shown as placeholder nodes at the top of the list. */
+  infoNodes?: boolean;
 }
 export interface SubTemplateServiceGroup {
   key: string;
@@ -909,9 +911,8 @@ export interface SubscriptionItem {
   kind: "own" | "share";
   token: string;
   path: string;
-  sourceAll: boolean;
-  inboundIds: number[];
-  sourceIds: number[];
+  /** Node groups it lists, in order. */
+  groupIds: number[];
   sharedIds: number[];
   options: SubPipeline;
   expireTime: number;
@@ -936,9 +937,7 @@ export interface SubscriptionDraft {
   id?: number;
   name: string;
   kind: "own" | "share";
-  sourceAll: boolean;
-  inboundIds: number[];
-  sourceIds: number[];
+  groupIds: number[];
   options: SubPipeline;
   expireTime: number;
   enabled?: boolean;
@@ -1042,6 +1041,8 @@ export interface RemoteSourceItem {
   nodeCount: number;
   /** The provider's Subscription-Userinfo header. */
   userinfo: string;
+  /** Sent when fetching; "" uses the panel's default (a Mihomo UA). */
+  userAgent: string;
 }
 export interface RemoteSyncResult {
   added: number;
@@ -1063,6 +1064,7 @@ export const saveRemoteSource = (data: {
   intervalHours: number;
   relayOnly: boolean;
   enabled?: boolean;
+  userAgent?: string;
 }) =>
   Network.post<
     RemoteSourceItem | { source: RemoteSourceItem; result: RemoteSyncResult }
@@ -1081,7 +1083,6 @@ export interface SubPreview {
   items: SubPreviewItem[];
   total: number;
   dropped: number;
-  scriptError: string;
   /** The picked templates' groups with these nodes. */
   templates?: Partial<
     Record<
@@ -1098,6 +1099,60 @@ export interface SubPreview {
 }
 export const previewSubscription = (data: SubscriptionDraft) =>
   Network.post<SubPreview>("/subscription/preview", data);
+
+/** A node group's processing (the node half of SubPipeline). */
+export type NodeGroupOptions = Pick<
+  SubPipeline,
+  | "lines"
+  | "regions"
+  | "protocols"
+  | "include"
+  | "exclude"
+  | "rename"
+  | "addFlag"
+  | "prefix"
+  | "dedupe"
+  | "sort"
+  | "script"
+>;
+/** A reusable node list: picked inbounds and remote sources, processed. */
+export interface NodeGroupItem {
+  id: number;
+  name: string;
+  sourceAll: boolean;
+  inboundIds: number[];
+  sourceIds: number[];
+  options: NodeGroupOptions;
+  nodeCount: number;
+  /** Subscriptions that list it. */
+  subscriptions: Array<{ id: number; name: string }>;
+}
+export interface NodeGroupDraft {
+  id?: number;
+  name: string;
+  sourceAll: boolean;
+  inboundIds: number[];
+  sourceIds: number[];
+  options: NodeGroupOptions;
+}
+export interface NodeGroupPreview {
+  items: SubPreviewItem[];
+  total: number;
+  dropped: number;
+  scriptError: string;
+}
+export const getNodeGroups = () =>
+  Network.post<{ items: NodeGroupItem[]; regions: string[] }>(
+    "/subscription/group/list",
+  );
+export const saveNodeGroup = (data: NodeGroupDraft) =>
+  Network.post<NodeGroupItem>("/subscription/group/save", data);
+export const deleteNodeGroup = (id: number) =>
+  Network.post("/subscription/group/delete", { id });
+export const orderNodeGroups = (ids: number[]) =>
+  Network.post("/subscription/group/order", { ids });
+export const previewNodeGroup = (data: NodeGroupDraft) =>
+  Network.post<NodeGroupPreview>("/subscription/group/preview", data);
 
 export const testNotify = (data: {
   telegramToken: string;

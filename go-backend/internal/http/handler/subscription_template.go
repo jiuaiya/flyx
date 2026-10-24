@@ -122,8 +122,8 @@ func (h *Handler) checkPipelineTemplates(p subPipeline) error {
 }
 
 // fetchTemplate downloads a template's content.
-func fetchTemplate(ctx context.Context, url string) (string, error) {
-	body, _, err := fetchSubscriptionInfo(ctx, url)
+func (h *Handler) fetchTemplate(ctx context.Context, url string) (string, error) {
+	body, _, err := h.fetchSubscriptionInfo(ctx, url, "")
 	if err != nil {
 		return "", errText("下载模板失败：" + err.Error())
 	}
@@ -135,7 +135,7 @@ func fetchTemplate(ctx context.Context, url string) (string, error) {
 func (h *Handler) refreshTemplate(ctx context.Context, t *model.SubscriptionTemplate) error {
 	now := time.Now().UnixMilli()
 	t.LastFetch = now
-	body, err := fetchTemplate(ctx, t.SourceURL)
+	body, err := h.fetchTemplate(ctx, t.SourceURL)
 	if err == nil {
 		_, err = kernel.CheckTemplate(t.Kind, body, nil)
 	}
@@ -206,7 +206,7 @@ type subTemplateRequest struct {
 
 // content returns the request's template text, downloading it for a URL
 // template.
-func (req *subTemplateRequest) content(ctx context.Context) (string, error) {
+func (req *subTemplateRequest) content(ctx context.Context, h *Handler) (string, error) {
 	req.SourceURL = strings.TrimSpace(req.SourceURL)
 	if req.Builder != nil {
 		if req.Builder.Groups == nil {
@@ -226,7 +226,7 @@ func (req *subTemplateRequest) content(ctx context.Context) (string, error) {
 	if !isSubscriptionURL(req.SourceURL) {
 		return "", errText("请填写 http(s) 模板地址")
 	}
-	return fetchTemplate(ctx, req.SourceURL)
+	return h.fetchTemplate(ctx, req.SourceURL)
 }
 
 // subscriptionTemplateCheck parses a template and previews its groups with
@@ -241,26 +241,27 @@ func (h *Handler) subscriptionTemplateCheck(w http.ResponseWriter, r *http.Reque
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
-	content, err := req.content(r.Context())
+	content, err := req.content(r.Context(), h)
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	rows, err := h.repo.ListNodeInbounds()
+	c, err := h.loadSubContext()
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	sub := &model.Subscription{SourceAll: 1}
+	// Every node, unprocessed, unless a subscription is picked.
+	nodes, _ := h.inboundEndpoints(c.rows)
 	var opts kernel.SubOptions
 	sample := "全部节点"
 	if req.SubscriptionID > 0 {
 		if s, err := h.repo.GetSubscription(req.SubscriptionID); err == nil && s != nil {
-			sub, opts, sample = s, parsePipeline(s.Options).options(), s.Name
+			nodes, opts, sample = h.subNodes(c, s), parsePipeline(s.Options).options(), s.Name
 		}
 	}
 	var names []string
-	for _, e := range kernel.ApplySubOptions(h.subEndpoints(sub, rows), opts) {
+	for _, e := range kernel.ApplySubOptions(nodes, opts) {
 		names = append(names, e.Name)
 	}
 	summary, err := kernel.CheckTemplate(req.Kind, content, names)
@@ -309,7 +310,7 @@ func (h *Handler) subscriptionTemplateSave(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	content, err := req.content(r.Context())
+	content, err := req.content(r.Context(), h)
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return

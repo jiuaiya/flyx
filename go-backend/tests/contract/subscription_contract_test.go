@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -48,9 +49,9 @@ func TestSubscriptionContract(t *testing.T) {
 		t.Fatalf("legacy info must point at the default subscription: %v vs %v", info, def)
 	}
 
-	t.Run("own subscription with pipeline", func(t *testing.T) {
-		out := kernelContractPost(t, router, admin, "/api/v1/subscription/save",
-			`{"name":"只要香港","sourceAll":true,"options":{"regions":["🇭🇰 香港"],"addFlag":true,"prefix":"[x] "}}`)
+	t.Run("node group processing", func(t *testing.T) {
+		hk := saveNodeGroup(t, router, admin, `{"name":"香港","sourceAll":true,"options":{"regions":["🇭🇰 香港"],"addFlag":true,"prefix":"[x] "}}`)
+		out := kernelContractPost(t, router, admin, "/api/v1/subscription/save", `{"name":"只要香港","groupIds":[`+jsonInt64(hk)+`]}`)
 		if out.Code != 0 {
 			t.Fatalf("save: %+v", out)
 		}
@@ -58,11 +59,36 @@ func TestSubscriptionContract(t *testing.T) {
 		if code != 200 || strings.Contains(body, "vless://") || !strings.Contains(body, "%5Bx%5D%20%F0%9F%87%AD%F0%9F%87%B0%20") {
 			t.Fatalf("filtered, flagged, prefixed: %d %s", code, body)
 		}
-		if out := kernelContractPost(t, router, admin, "/api/v1/subscription/save",
+		if out := kernelContractPost(t, router, admin, "/api/v1/subscription/group/save",
 			`{"name":"bad","sourceAll":true,"options":{"include":"/[/"}}`); out.Code == 0 {
 			t.Fatal("bad regex must be rejected")
 		}
-		prev := kernelContractPost(t, router, admin, "/api/v1/subscription/preview",
+		if out := kernelContractPost(t, router, admin, "/api/v1/subscription/save", `{"name":"空","groupIds":[]}`); out.Code == 0 {
+			t.Fatal("a subscription needs a node group")
+		}
+		if out := kernelContractPost(t, router, admin, "/api/v1/subscription/group/delete", `{"id":`+jsonInt64(hk)+`}`); out.Code == 0 {
+			t.Fatal("a group in use must not be deleted")
+		}
+
+		// Groups are listed in order: Tokyo first, then the Hong Kong group.
+		tokyo := saveNodeGroup(t, router, admin, `{"name":"东京","sourceAll":true,"options":{"protocols":["vless"]}}`)
+		out = kernelContractPost(t, router, admin, "/api/v1/subscription/save", `{"name":"合并","groupIds":[`+jsonInt64(tokyo)+`,`+jsonInt64(hk)+`]}`)
+		if v := out.Data.(map[string]interface{}); out.Code != 0 || valueAsInt(v["nodeCount"]) != 2 || len(v["groupIds"].([]interface{})) != 2 {
+			t.Fatalf("two groups: %+v", out)
+		}
+		_, body, _ = sub(out.Data.(map[string]interface{})["path"].(string))
+		if lines := strings.Split(body, "\n"); len(lines) != 2 || !strings.HasPrefix(lines[0], "vless://") {
+			t.Fatalf("groups in order: %s", body)
+		}
+		groups := kernelContractPost(t, router, admin, "/api/v1/subscription/group/list", `{}`).Data.(map[string]interface{})["items"].([]interface{})
+		for _, g := range groups {
+			m := g.(map[string]interface{})
+			if int64(m["id"].(float64)) == hk && len(m["subscriptions"].([]interface{})) != 2 {
+				t.Fatalf("group users: %v", m)
+			}
+		}
+
+		prev := kernelContractPost(t, router, admin, "/api/v1/subscription/group/preview",
 			`{"sourceAll":true,"options":{"protocols":["vless"],"rename":"东京 => Tokyo"}}`).Data.(map[string]interface{})
 		pi := prev["items"].([]interface{})
 		if len(pi) != 1 || pi[0].(map[string]interface{})["name"] != "Tokyo VLESS" ||
@@ -72,21 +98,34 @@ func TestSubscriptionContract(t *testing.T) {
 	})
 
 	t.Run("share subscription lifecycle", func(t *testing.T) {
-		if out := kernelContractPost(t, router, admin, "/api/v1/subscription/save", `{"name":"小明","kind":"share","sourceAll":false,"inboundIds":[]}`); out.Code == 0 {
+		if out := kernelContractPost(t, router, admin, "/api/v1/subscription/group/save", `{"name":"空","sourceAll":false,"inboundIds":[]}`); out.Code == 0 {
 			t.Fatal("picking nothing must be rejected")
 		}
+		group := saveNodeGroup(t, router, admin, `{"name":"小明的节点","inboundIds":[`+jsonInt64(vless)+`,`+jsonInt64(ss)+`,999]}`)
+		groupIDs := `"groupIds":[` + jsonInt64(group) + `]`
 		out := kernelContractPost(t, router, admin, "/api/v1/subscription/save",
-			`{"name":"小明","kind":"share","inboundIds":[`+jsonInt64(vless)+`,`+jsonInt64(ss)+`,999]}`)
+			`{"name":"小明","kind":"share",`+groupIDs+`}`)
 		if out.Code != 0 {
 			t.Fatalf("create: %+v", out)
 		}
 		view := out.Data.(map[string]interface{})
 		id := int64(view["id"].(float64))
 		path := view["path"].(string)
-		if len(view["inboundIds"].([]interface{})) != 2 || len(view["sharedIds"].([]interface{})) != 1 || view["active"] != true {
+		if len(view["groupIds"].([]interface{})) != 1 || len(view["sharedIds"].([]interface{})) != 1 || view["active"] != true {
 			t.Fatalf("view: %v", view)
 		}
 		uuid := mustQueryString(t, r, `SELECT uuid FROM subscription WHERE id = ?`, id)
+		// A link that stopped working answers with one placeholder node
+		// named after the reason, so the client shows why.
+		stopped := func(what, reason string) {
+			t.Helper()
+			code, body, _ := sub(path)
+			name, _ := url.PathUnescape(body)
+			if code != 200 || strings.Count(body, "\n") != 0 || !strings.Contains(body, "@127.0.0.1:1") ||
+				!strings.Contains(name, reason) || strings.Contains(body, uuid) {
+				t.Fatalf("%s: %d %s", what, code, name)
+			}
+		}
 		code, body, hdr := sub(path)
 		if code != 200 || !strings.Contains(body, "vless://"+uuid+"@") || strings.Contains(body, ownerSettings.UUID) ||
 			!strings.Contains(hdr, "upload=0") {
@@ -98,30 +137,26 @@ func TestSubscriptionContract(t *testing.T) {
 
 		past := time.Now().Add(-time.Hour).UnixMilli()
 		kernelContractPost(t, router, admin, "/api/v1/subscription/save",
-			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share","inboundIds":[`+jsonInt64(vless)+`],"expireTime":`+jsonInt64(past)+`}`)
-		if code, _, _ := sub(path); code != http.StatusForbidden {
-			t.Fatalf("expired: %d", code)
-		}
+			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share",`+groupIDs+`,"expireTime":`+jsonInt64(past)+`}`)
+		stopped("expired", "订阅已过期")
 		future := time.Now().Add(48 * time.Hour).UnixMilli()
 		kernelContractPost(t, router, admin, "/api/v1/subscription/save",
-			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share","inboundIds":[`+jsonInt64(vless)+`],"expireTime":`+jsonInt64(future)+`,"enabled":false}`)
-		if code, _, _ := sub(path); code != http.StatusForbidden {
-			t.Fatalf("disabled: %d", code)
-		}
+			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share",`+groupIDs+`,"expireTime":`+jsonInt64(future)+`,"enabled":false}`)
+		stopped("disabled", "订阅已停用")
 		kernelContractPost(t, router, admin, "/api/v1/subscription/save",
-			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share","inboundIds":[`+jsonInt64(vless)+`],"expireTime":`+jsonInt64(future)+`,"enabled":true}`)
+			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share",`+groupIDs+`,"expireTime":`+jsonInt64(future)+`,"enabled":true}`)
 		if code, _, hdr := sub(path); code != 200 || !strings.Contains(hdr, "expire="+jsonInt64(future/1000)) {
 			t.Fatalf("re-enabled: %d %s", code, hdr)
 		}
 
 		// Traffic limit: reported in the header, cut off once reached.
 		out = kernelContractPost(t, router, admin, "/api/v1/subscription/save",
-			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share","inboundIds":[`+jsonInt64(vless)+`],"expireTime":`+jsonInt64(future)+`,"trafficLimit":1000,"resetDay":5}`)
+			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share",`+groupIDs+`,"expireTime":`+jsonInt64(future)+`,"trafficLimit":1000,"resetDay":5}`)
 		if v := out.Data.(map[string]interface{}); out.Code != 0 || valueAsInt(v["trafficLimit"]) != 1000 || valueAsInt(v["resetDay"]) != 5 {
 			t.Fatalf("limit save: %+v", out)
 		}
 		if out := kernelContractPost(t, router, admin, "/api/v1/subscription/save",
-			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share","inboundIds":[`+jsonInt64(vless)+`],"resetDay":31}`); out.Code == 0 {
+			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share",`+groupIDs+`,"resetDay":31}`); out.Code == 0 {
 			t.Fatal("reset day 31 must be rejected")
 		}
 		if err := r.ApplySubscriptionCounterSamples(landing, "e", []repo.SubscriptionCounterSample{
@@ -132,8 +167,21 @@ func TestSubscriptionContract(t *testing.T) {
 			t.Fatalf("share traffic header: %d %s", code, hdr)
 		}
 		_ = r.ApplySubscriptionCounterSamples(landing, "e", []repo.SubscriptionCounterSample{{SubscriptionID: id, Direction: "down", Bytes: 900}}, time.Now().UnixMilli())
-		if code, _, _ := sub(path); code != http.StatusForbidden {
-			t.Fatalf("over the limit: %d", code)
+		stopped("over the limit", "流量已用完")
+
+		// Info nodes: expiry and traffic first, as placeholder nodes.
+		out = kernelContractPost(t, router, admin, "/api/v1/subscription/save",
+			`{"id":`+jsonInt64(id)+`,"name":"小明","kind":"share",`+groupIDs+`,"expireTime":`+jsonInt64(future)+`,"trafficLimit":4000,"resetDay":5,"options":{"infoNodes":true}}`)
+		if out.Code != 0 || out.Data.(map[string]interface{})["options"].(map[string]interface{})["infoNodes"] != true {
+			t.Fatalf("info nodes save: %+v", out)
+		}
+		_, body, _ = sub(path)
+		lines := strings.Split(body, "\n")
+		first, _ := url.PathUnescape(lines[0])
+		second, _ := url.PathUnescape(lines[1])
+		if len(lines) != 4 || !strings.Contains(first, "⏳ 到期 "+time.UnixMilli(future).Format("2006-01-02")) ||
+			!strings.HasSuffix(second, "KB / 3.91KB") || !strings.Contains(second, "📊 剩余 ") || !strings.Contains(lines[2], uuid) {
+			t.Fatalf("info nodes: %q %q %v", first, second, lines)
 		}
 		out = kernelContractPost(t, router, admin, "/api/v1/subscription/reset-traffic", `{"id":`+jsonInt64(id)+`}`)
 		if v := out.Data.(map[string]interface{}); out.Code != 0 || valueAsInt(v["downloadBytes"]) != 0 || v["active"] != true {

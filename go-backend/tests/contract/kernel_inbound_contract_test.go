@@ -98,7 +98,7 @@ func TestKernelInboundLifecycleContract(t *testing.T) {
 	create := kernelContractPost(t, router, admin, "/api/v1/inbound/create",
 		`{"nodeId":`+jsonInt64(nodeID)+`,"kernelType":"xray","name":"东京-Reality","protocol":"vless","port":443,
 		  "settings":{"flow":"xtls-rprx-vision"},"security":{"type":"reality","sni":"www.example.com"}}`)
-	if create.Code != 0 || !strings.Contains(create.Msg, "下发到节点失败") {
+	if create.Code != 0 || !strings.Contains(create.Msg, "下发到服务器失败") {
 		t.Fatalf("create should succeed with dispatch warning, got %+v", create)
 	}
 	inboundID := mustQueryInt64(t, r, `SELECT id FROM node_inbound WHERE kernel_id = ?`, kernelID)
@@ -315,4 +315,14 @@ func containsInt(list []int, v int) bool {
 		}
 	}
 	return false
+}
+
+// saveNodeGroup creates a subscription node group and returns its id.
+func saveNodeGroup(t *testing.T, router http.Handler, token, body string) int64 {
+	t.Helper()
+	out := kernelContractPost(t, router, token, "/api/v1/subscription/group/save", body)
+	if out.Code != 0 {
+		t.Fatalf("node group: %+v", out)
+	}
+	return int64(out.Data.(map[string]interface{})["id"].(float64))
 }

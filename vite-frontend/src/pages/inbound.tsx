@@ -8,7 +8,7 @@ import type {
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
-import { Copy } from "lucide-react";
+import { ChevronDown, Copy } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import {
@@ -34,6 +34,11 @@ import { PageLoadingState } from "@/components/page-state";
 import { PageHeader, PageTabs, PageToolbar } from "@/components/page-kit";
 import { CARD_GRID, type CardTone, InfoCard } from "@/components/info-card";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
+import {
+  markPageCached,
+  pageCached,
+  useCachedState,
+} from "@/hooks/use-cached-state";
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
 import { GroupHeader, groupItems, useCollapsed } from "@/pages/inbound/group";
 import { LatencyCell } from "@/components/latency-cell";
@@ -109,7 +114,7 @@ const CONFIRM_TEXT: Record<
 > = {
   delete: {
     title: "删除入站",
-    body: "删除后节点上的该服务会立即停止，且无法恢复。",
+    body: "删除后服务器上的该服务会立即停止，且无法恢复。",
     button: "确认删除",
     color: "danger",
   },
@@ -198,7 +203,7 @@ function groupKeyOf(i: InboundApiItem): string {
 }
 
 function groupLabelOf(i: InboundApiItem): string {
-  if (!i.external) return i.nodeName || `节点 ${i.nodeId}`;
+  if (!i.external) return i.nodeName || `服务器 ${i.nodeId}`;
 
   return i.sourceId ? `订阅源 · ${i.sourceName || i.sourceId}` : EXTERNAL_LABEL;
 }
@@ -207,12 +212,27 @@ function groupRank(key: string): number {
   return key.startsWith("source:") ? 2 : key === "external" ? 1 : 0;
 }
 
+const PAGE = "inbound";
+
 export default function InboundPage() {
-  const [loading, setLoading] = useState(true);
-  const [caps, setCaps] = useState<KernelCapabilitiesApiData | null>(null);
-  const [nodes, setNodes] = useState<NodeApiItem[]>([]);
-  const [kernels, setKernels] = useState<KernelApiItem[]>([]);
-  const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
+  // A revisit shows the last data at once and reloads in the background.
+  const [loading, setLoading] = useState(() => !pageCached(PAGE));
+  const [caps, setCaps] = useCachedState<KernelCapabilitiesApiData | null>(
+    PAGE,
+    "caps",
+    null,
+  );
+  const [nodes, setNodes] = useCachedState<NodeApiItem[]>(PAGE, "nodes", []);
+  const [kernels, setKernels] = useCachedState<KernelApiItem[]>(
+    PAGE,
+    "kernels",
+    [],
+  );
+  const [inbounds, setInbounds] = useCachedState<InboundApiItem[]>(
+    PAGE,
+    "inbounds",
+    [],
+  );
   const [isCollapsed, toggleCollapsed] = useCollapsed();
   const [searchKeyword, setSearchKeyword] = useLocalStorageState(
     "inbound-search-keyword",
@@ -247,7 +267,11 @@ export default function InboundPage() {
   const [batchToggling, setBatchToggling] = useState(false);
   const [probing, setProbing] = useState(false);
   const [probingIds, setProbingIds] = useState<Set<number>>(new Set());
-  const [sources, setSources] = useState<RemoteSourceItem[]>([]);
+  const [sources, setSources] = useCachedState<RemoteSourceItem[]>(
+    PAGE,
+    "sources",
+    [],
+  );
   const loadingRef = useRef(false);
   const reloadPendingRef = useRef(false);
   const metadataLoadedAtRef = useRef(0);
@@ -293,6 +317,7 @@ export default function InboundPage() {
               probe: latestProbe(i.probe, previous.get(i.id)?.probe),
             }));
           });
+          markPageCached(PAGE);
           setSelectedIds((prev) => {
             if (prev.size === 0) return prev;
             const alive = new Set(rows.map((i) => i.id));
@@ -317,7 +342,8 @@ export default function InboundPage() {
   );
 
   useEffect(() => {
-    loadData(true);
+    // With cached data on screen, reload without the loading state.
+    loadData(!pageCached(PAGE));
   }, [loadData]);
   useVisiblePolling(
     useCallback(() => loadData(false, { silent: true }), [loadData]),
@@ -782,8 +808,8 @@ export default function InboundPage() {
   return (
     <AnimatedPage className="px-3 lg:px-6 py-6">
       <PageHeader
-        description="落地是客户端最终连到的节点：在自己的服务器上搭建，或导入现成的节点"
-        title="落地"
+        description="客户端最终连上的节点：在自己的服务器上搭建，或导入现成的"
+        title="节点"
       />
       <PageTabs tabs={tabs} value={tab} onChange={setTab} />
 
@@ -817,7 +843,7 @@ export default function InboundPage() {
                   onPress: () => setSelectMode(true),
                 },
               ]}
-              placeholder="搜索名称、节点、协议、端口"
+              placeholder="搜索名称、服务器、协议、端口"
               primary={{
                 key: "create",
                 label: "新建入站",
@@ -828,19 +854,24 @@ export default function InboundPage() {
               onSearch={setSearchKeyword}
             >
               {nodeOptions.length > 1 && (
-                <select
-                  aria-label="按节点筛选"
-                  className="h-9 max-w-[8rem] shrink-0 rounded-xl bg-default-100 px-2 text-sm"
-                  value={nodeFilter}
-                  onChange={(e) => setNodeFilter(e.target.value)}
-                >
-                  <option value="">全部节点</option>
-                  {nodeOptions.map(([id, name]) => (
-                    <option key={id} value={id}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
+                // appearance-none: the browser's own arrow ignored the
+                // padding and stuck out of the pill.
+                <div className="relative max-w-[10rem] shrink-0">
+                  <select
+                    aria-label="按服务器筛选"
+                    className="h-9 w-full appearance-none truncate rounded-full bg-default-100 pl-3.5 pr-8 text-sm outline-none"
+                    value={nodeFilter}
+                    onChange={(e) => setNodeFilter(e.target.value)}
+                  >
+                    <option value="">全部服务器</option>
+                    {nodeOptions.map(([id, name]) => (
+                      <option key={id} value={id}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-default-500" />
+                </div>
               )}
             </PageToolbar>
           )}
@@ -902,10 +933,10 @@ export default function InboundPage() {
                 </h3>
                 <p className="text-default-500 text-sm max-w-sm">
                   {kernels.length === 0 && inbounds.length === 0
-                    ? "先为落地节点安装内核，然后在这里创建 VLESS-Reality、SS2022 等入站；也可以点“导入”，导入别处搭好的 ss 节点用来对接中转。"
+                    ? "先在服务器上安装内核，然后在这里创建 VLESS-Reality、SS2022 等入站；也可以点“导入”，导入别处搭好的 ss 节点用来对接中转。"
                     : inbounds.length === 0
                       ? "点击“新建入站”，选择一个模板即可快速创建。"
-                      : "换个关键词或节点试试。"}
+                      : "换个关键词或服务器试试。"}
                 </p>
                 {kernels.length === 0 && inbounds.length === 0 && (
                   <Button
@@ -1165,9 +1196,9 @@ export default function InboundPage() {
         onOpenChange={(open) => !open && setDetails(null)}
       >
         <ModalContent>
-          {(onClose) => (
+          {() => (
             <>
-              <ModalHeader className="flex flex-col gap-1">
+              <ModalHeader closable className="flex flex-col gap-1">
                 <h2 className="text-lg font-bold">{details?.name}</h2>
                 <p className="text-small text-default-500">
                   手动配置客户端时使用；一般直接用“分享”或订阅导入即可
@@ -1202,11 +1233,6 @@ export default function InboundPage() {
                     ))}
                 </div>
               </ModalBody>
-              <ModalFooter>
-                <Button variant="light" onPress={onClose}>
-                  关闭
-                </Button>
-              </ModalFooter>
             </>
           )}
         </ModalContent>
@@ -1289,7 +1315,7 @@ export default function InboundPage() {
                   <p className="text-small text-default-500">
                     {panelOnly
                       ? "只删除面板里的记录和相关中转，原服务器上的节点不受影响。"
-                      : "相关中转会一并删除；面板创建的入站会在节点上立即停止，且无法恢复。"}
+                      : "相关中转会一并删除；面板创建的入站会在服务器上立即停止，且无法恢复。"}
                   </p>
                 </ModalBody>
                 <ModalFooter>
@@ -1301,7 +1327,7 @@ export default function InboundPage() {
                     isLoading={batchDeleting}
                     onPress={runBatchDelete}
                   >
-                    确认删除
+                    删除
                   </Button>
                 </ModalFooter>
               </>

@@ -105,7 +105,7 @@ const CONFIG_ITEMS: ConfigItem[] = [
     label: "面板后端地址",
     placeholder: "请输入面板后端IP:PORT",
     description:
-      "节点连接面板用，格式 ip:port 或 域名:port；可套 CDN / HTTPS，通讯已加密",
+      "服务器连接面板用，格式 ip:port 或 域名:port；可套 CDN / HTTPS，通讯已加密",
     type: "input",
   },
   {
@@ -165,7 +165,7 @@ const CONFIG_ITEMS: ConfigItem[] = [
     key: "monitor_retention_days",
     label: "监控数据保留天数",
     placeholder: "7",
-    description: "节点指标、隧道流量、服务监控和隧道质量历史，默认 7 天",
+    description: "服务器指标、隧道流量、服务监控和隧道质量历史，默认 7 天",
     type: "input",
   },
   {
@@ -230,7 +230,7 @@ const CONFIG_ITEMS: ConfigItem[] = [
     key: "github_proxy_enabled",
     label: "开启 GitHub 加速",
     description:
-      "默认关闭，直接连接 GitHub；开启后更新检测、节点安装、升级和内核下载经代理",
+      "默认关闭，直接连接 GitHub；开启后更新检测、服务器安装、升级和内核下载经代理",
     type: "switch",
   },
   {
@@ -238,7 +238,7 @@ const CONFIG_ITEMS: ConfigItem[] = [
     label: "加速地址",
     placeholder: "https://gcode.hostcentral.cc",
     description:
-      "GitHub 下载加速代理地址。节点在国内、面板在海外时选「面板中转」：节点经面板下载，面板会缓存文件",
+      "GitHub 下载加速代理地址。服务器在国内、面板在海外时选「面板中转」：服务器经面板下载，面板会缓存文件",
     type: "input",
     dependsOn: "github_proxy_enabled",
     dependsValue: "true",
@@ -250,11 +250,18 @@ const CONFIG_ITEMS: ConfigItem[] = [
       "普通用户的规则可指向 127.0.0.1、10.x、172.16–31.x、192.168.x 等内网地址；默认关闭，避免成为开放代理",
     type: "switch",
   },
+  {
+    key: "fetch_allow_local",
+    label: "拉取订阅可访问内网地址",
+    description:
+      "订阅源、网址模板和图标库可从 127.0.0.1、10.x、192.168.x 等内网地址下载，例如同机或局域网里的 Sub-Store；默认关闭，避免面板被用来读取内网服务",
+    type: "switch",
+  },
 ];
 
 const BACKUP_TYPE_OPTIONS = [
   { value: "users", label: "用户" },
-  { value: "nodes", label: "节点" },
+  { value: "nodes", label: "服务器" },
   { value: "tunnels", label: "隧道" },
   { value: "forwards", label: "规则" },
   { value: "userTunnels", label: "用户隧道权限" },
@@ -293,6 +300,7 @@ const getInitialConfigs = (): Record<string, string> => {
     "github_proxy_enabled",
     "github_proxy_url",
     "allow_local_remote_addr",
+    "fetch_allow_local",
     "hide_footer_brand",
   ];
   const initialConfigs: Record<string, string> = {};
@@ -347,6 +355,7 @@ const SECTION_CONFIG_KEYS: Partial<Record<SectionKey, string[]>> = {
     "github_oauth_secret",
     "admin_password_login_disabled",
     "allow_local_remote_addr",
+    "fetch_allow_local",
   ],
   network: [
     "monitor_tunnel_quality_enabled",
@@ -1585,7 +1594,7 @@ export default function ConfigPage() {
             "allow_local_remote_addr",
             "允许",
             "禁止",
-          )}`}
+          )} · 拉取内网订阅${onOff("fetch_allow_local", "允许", "禁止")}`}
           title="安全与登录"
         >
           {renderItem("captcha_enabled")}
@@ -1596,6 +1605,7 @@ export default function ConfigPage() {
           {renderItem("github_oauth_secret")}
           {renderItem("admin_password_login_disabled")}
           {renderItem("allow_local_remote_addr")}
+          {renderItem("fetch_allow_local")}
         </ConfigSection>
 
         <ConfigSection
@@ -1603,7 +1613,7 @@ export default function ConfigPage() {
           summary={`${tunnelQualitySummary} · 监控保留 ${
             configs.monitor_retention_days || 7
           } 天 · GitHub 加速${onOff("github_proxy_enabled")}`}
-          title="节点与监控"
+          title="服务器与监控"
         >
           {renderItem("monitor_tunnel_quality_enabled")}
           {renderItem(TUNNEL_QUALITY_INTERVAL_CONFIG_KEY)}
@@ -1919,7 +1929,7 @@ export default function ConfigPage() {
                   isLoading={exporting}
                   onPress={handleExport}
                 >
-                  {exporting ? "导出中..." : "确认导出"}
+                  {exporting ? "导出中..." : "导出"}
                 </Button>
               </ModalFooter>
             </>
@@ -2009,7 +2019,7 @@ export default function ConfigPage() {
                   isLoading={systemUpgradeExecuting}
                   onPress={handleConfirmSystemUpgrade}
                 >
-                  确认升级
+                  升级
                 </Button>
               </ModalFooter>
             </>

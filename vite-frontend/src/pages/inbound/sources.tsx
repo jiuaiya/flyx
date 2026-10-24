@@ -4,7 +4,7 @@ import type {
   RemoteSyncResult,
 } from "@/api";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { FileUp, RefreshCw } from "lucide-react";
 
@@ -77,6 +77,7 @@ interface SourceDraft {
   role: RemoteSourceRole;
   intervalHours: number;
   relayOnly: boolean;
+  userAgent: string;
   /** A newly chosen file (file sources). */
   content?: string;
   fileName?: string;
@@ -90,6 +91,7 @@ const draftOf = (s: RemoteSourceItem): SourceDraft => ({
   role: s.role,
   intervalHours: s.intervalHours,
   relayOnly: s.relayOnly,
+  userAgent: s.userAgent ?? "",
 });
 
 function ago(ms: number): string {
@@ -144,6 +146,10 @@ export function RemoteSourcesSection({
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Deleting asks first, in the footer: with the nodes or keeping them.
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  useEffect(() => setConfirmDelete(false), [draft?.id]);
   // A file source being updated from the list's upload button.
   const reupload = useRef<RemoteSourceItem | null>(null);
   const reuploadInput = useRef<HTMLInputElement>(null);
@@ -200,6 +206,7 @@ export function RemoteSourcesSection({
         role: draft.role,
         intervalHours: draft.intervalHours,
         relayOnly: draft.relayOnly,
+        userAgent: draft.kind === "url" ? draft.userAgent.trim() : "",
         content: draft.kind === "file" ? draft.content : undefined,
       };
       const res = await saveRemoteSource(data);
@@ -254,6 +261,7 @@ export function RemoteSourcesSection({
               role: "",
               intervalHours: 12,
               relayOnly: false,
+              userAgent: "",
             })
           }
         >
@@ -262,7 +270,7 @@ export function RemoteSourcesSection({
       </div>
       {sources.length === 0 ? (
         <p className="rounded-xl border border-dashed border-divider px-3 py-4 text-center text-xs text-default-500">
-          填机场或别人的订阅链接，或上传订阅文件：节点出现在“入站”里，可以给自建落地做前置中转，也能和自己的落地合并成一个订阅。在“导入”里粘贴订阅地址并打开“定时同步”也会存到这里
+          填机场或别人的订阅链接，或上传订阅文件：节点出现在“入站”里，可以给自建节点做前置中转，也能和自己的节点一起放进订阅。在“导入”里粘贴订阅地址并打开“定时同步”也会存到这里
         </p>
       ) : (
         <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">
@@ -461,6 +469,18 @@ export function RemoteSourcesSection({
                       />
                     </div>
                   )}
+                  {draft.kind === "url" && (
+                    <Input
+                      description="拉取订阅时发送的 UA。有的机场按 UA 决定返回的格式或节点，拿不到节点或缺节点时可以换成客户端的 UA，比如 mihomo/1.19.0、Shadowrocket/2070；留空用默认的 clash.meta/1.19.0"
+                      label="User-Agent（可选）"
+                      placeholder="clash.meta/1.19.0"
+                      value={draft.userAgent}
+                      variant="bordered"
+                      onChange={(e) =>
+                        setDraft({ ...draft, userAgent: e.target.value })
+                      }
+                    />
+                  )}
                   <p className="text-xs text-default-500">
                     {draft.kind === "url" ? "更新" : "重新上传"}
                     时按名称对上已有节点：改了地址就跟着改（中转也跟着改），没了就移除；挂着中转的会保留
@@ -493,42 +513,58 @@ export function RemoteSourcesSection({
                       当前 {editing.nodeCount} 个节点 · {ago(editing.lastFetch)}
                     </p>
                   )}
-                  {draft.id && (
-                    <div className="space-y-2 rounded-xl border border-danger/30 p-3">
-                      <p className="text-xs text-default-500">删除订阅源</p>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          color="danger"
-                          isLoading={deleting}
-                          size="sm"
-                          variant="flat"
-                          onPress={() => remove(false)}
-                        >
-                          连同节点一起删除
-                        </Button>
-                        <Button
-                          isDisabled={deleting}
-                          size="sm"
-                          variant="flat"
-                          onPress={() => remove(true)}
-                        >
-                          只删订阅源，节点留下
-                        </Button>
-                      </div>
-                    </div>
-                  )}
                 </ModalBody>
-                <ModalFooter>
-                  <Button variant="light" onPress={onClose}>
-                    取消
-                  </Button>
-                  <Button color="primary" isLoading={saving} onPress={save}>
-                    {draft.id
-                      ? "保存"
-                      : draft.kind === "file"
-                        ? "添加"
-                        : "添加并更新"}
-                  </Button>
+                <ModalFooter className="flex-wrap">
+                  {confirmDelete ? (
+                    <>
+                      <p className="w-full text-sm text-danger">
+                        删除这个订阅源？它导入的节点可以保留，也可以一起删除
+                      </p>
+                      <Button
+                        variant="light"
+                        onPress={() => setConfirmDelete(false)}
+                      >
+                        取消
+                      </Button>
+                      <Button
+                        isDisabled={deleting}
+                        variant="flat"
+                        onPress={() => remove(true)}
+                      >
+                        保留节点
+                      </Button>
+                      <Button
+                        color="danger"
+                        isLoading={deleting}
+                        onPress={() => remove(false)}
+                      >
+                        一起删除
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      {draft.id && (
+                        <Button
+                          className="mr-auto"
+                          color="danger"
+                          variant="light"
+                          onPress={() => setConfirmDelete(true)}
+                        >
+                          删除
+                        </Button>
+                      )}
+                      <Button variant="light" onPress={onClose}>
+                        取消
+                      </Button>
+                      <Button color="primary" isLoading={saving} onPress={save}>
+                        {draft.id
+                          ? "保存"
+                          : draft.kind === "file"
+                            ? "添加"
+                            : "添加并更新"}
+                      </Button>
+                    </>
+                  )}
                 </ModalFooter>
               </>
             )
