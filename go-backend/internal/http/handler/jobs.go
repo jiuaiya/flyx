@@ -24,7 +24,7 @@ func (h *Handler) StartBackgroundJobs() {
 	h.jobsStarted = true
 	queue := newNodeReconnectProbeQueue()
 	h.reconnectProbes = queue
-	h.jobsWG.Add(15)
+	h.jobsWG.Add(16)
 	h.jobsMu.Unlock()
 
 	go h.runHourlyStatsLoop(ctx)
@@ -41,6 +41,7 @@ func (h *Handler) StartBackgroundJobs() {
 	go h.runNotifyLoop(ctx)
 	go h.runSubscriptionLoop(ctx)
 	go h.runRemoteSourceLoop(ctx)
+	go h.runGistBackupLoop(ctx)
 	go func() {
 		defer h.jobsWG.Done()
 		h.runNodeReconnectProbes(ctx, queue, 5*time.Second)

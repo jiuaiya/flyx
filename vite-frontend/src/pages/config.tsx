@@ -45,6 +45,7 @@ import {
   latencySummary,
 } from "@/pages/config/latency-card";
 import { ConfigSection, Field, SubHeading } from "@/pages/config/section";
+import { GistBackup } from "@/pages/config/gist-backup";
 import { isAdmin } from "@/utils/auth";
 import { getCachedConfigs, configCache, updateSiteConfig } from "@/config/site";
 import { githubCallbackUrl } from "@/utils/github-login";
@@ -1758,6 +1759,8 @@ export default function ConfigPage() {
               {importing ? "导入中..." : "选择并导入"}
             </Button>
           </Field>
+
+          <GistBackup />
         </ConfigSection>
 
         <ConfigSection

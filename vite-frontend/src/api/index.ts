@@ -230,7 +230,24 @@ export interface NodeTuneGroup {
   applied: boolean;
   settings: NodeTuneSetting[];
 }
+/** The line the buffers are sized for. */
+export interface NodeTuneLine {
+  bandwidthMbps: number;
+  rttMs: number;
+}
+export interface NodeTuneSizes {
+  ramMb: number;
+  bdp: number;
+  bufMax: number;
+  bufDefault: number;
+  /** Why bufMax has its value (2×BDP, memory cap or the 4 MB floor). */
+  bufReason: string;
+  tcpMem: string;
+}
 export interface NodeTuneStatus {
+  /** Missing from agents before line-based sizing. */
+  params?: NodeTuneLine;
+  sizes?: NodeTuneSizes;
   kernel: string;
   congestion: string;
   available: string;
@@ -243,10 +260,11 @@ export const nodeTune = (
   id: number,
   action: "status" | "apply" | "restore",
   groups: string[] = [],
+  line?: NodeTuneLine,
 ) =>
   Network.post<NodeTuneStatus>(
     "/node/tune",
-    { id, action, groups },
+    { id, action, groups, ...line },
     { timeout: 40 * 1000 },
   );
 export const testNodeNftables = (nodeId: number) =>
@@ -414,6 +432,46 @@ export const importBackupData = (data: BackupImportPayload) =>
   Network.post("/backup/import", data);
 export const restoreBackupData = (data: BackupImportPayload) =>
   Network.post("/backup/restore", data);
+
+/** Backups uploaded to a private GitHub Gist (see gist_backup.go). */
+export interface GistBackupStatus {
+  configured: boolean;
+  /** The saved token's start and end, e.g. "ghp_••••••••a1b2". */
+  tokenHint: string;
+  encrypted: boolean;
+  /** 0 = automatic upload off. */
+  intervalHours: number;
+  gistUrl: string;
+  /** Last attempt and last upload that made a revision (unix ms). */
+  lastAt: number;
+  lastUpload: number;
+  lastError: string;
+}
+export interface GistBackupVersion {
+  version: string;
+  committedAt: number;
+}
+export const getGistBackupStatus = () =>
+  Network.post<GistBackupStatus>("/backup/gist/status");
+/** An empty token or password keeps the saved one. */
+export const saveGistBackup = (data: {
+  token?: string;
+  clearToken?: boolean;
+  password?: string;
+  clearPassword?: boolean;
+  intervalHours: number;
+}) => Network.post<GistBackupStatus>("/backup/gist/save", data);
+export const uploadGistBackup = () =>
+  Network.post<{
+    result: { uploaded: boolean; message: string };
+    status: GistBackupStatus;
+  }>("/backup/gist/upload", {}, { timeout: 120000 });
+export const getGistBackupVersions = () =>
+  Network.post<GistBackupVersion[]>("/backup/gist/versions");
+export const restoreGistBackup = (data: {
+  version: string;
+  password: string;
+}) => Network.post("/backup/gist/restore", data, { timeout: 120000 });
 
 // 验证码相关接口
 export const checkCaptcha = () => Network.post("/captcha/check");
