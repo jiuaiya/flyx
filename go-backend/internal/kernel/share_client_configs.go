@@ -82,7 +82,11 @@ func loonConfig(endpoints []Endpoint, opts SubOptions) string {
 	lines = append(lines, "", "[Rule]", "FINAL,"+ruleFinalGroup, "", "[Remote Rule]")
 	for _, s := range ruleSteps(opts) {
 		for _, n := range append(append([]string{}, s.set.lists...), s.set.ipLists...) {
-			lines = append(lines, listRuleURL("Loon", n, ".list")+",policy="+s.target+",tag="+n+",enabled=true")
+			url := listRuleURL("Loon", n, ".list")
+			if n == "ChinaIPs" {
+				url = domesticIPListURL("Loon")
+			}
+			lines = append(lines, url+",policy="+s.target+",tag="+n+",enabled=true")
 		}
 	}
 	return strings.Join(lines, "\n") + "\n"

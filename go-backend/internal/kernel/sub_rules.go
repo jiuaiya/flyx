@@ -1,6 +1,9 @@
 package kernel
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // Routing rules in subscriptions (SubOptions.Rules): the profile gets
 // policy groups per service, remote rule sets and, for Mihomo and sing-box,
@@ -214,12 +217,52 @@ func listRuleURL(dir, name, ext string) string {
 	return listRulesURL + dir + "/" + name + "/" + name + ext
 }
 
+// IP-only fallback lists must resolve domain destinations. The ordinary
+// Surge/Loon lists contain no-resolve on every CIDR; Quantumult X does not.
+func domesticIPListURL(dir string) string {
+	ext := ".list"
+	if dir == "Surge" || dir == "Loon" {
+		ext = "_Resolve.list"
+	}
+	return listRuleURL(dir, "ChinaIPs", ext)
+}
+
 // ruleTarget maps a step target to a client's direct policy name.
 func ruleTarget(target, direct string) string {
 	if target == "DIRECT" {
 		return direct
 	}
 	return target
+}
+
+// Domestic IPs are the last check for domains missing from the site lists.
+// Resolve those domains before falling through to the final policy; earlier
+// service/private IP rules only inspect IPs already available to the client.
+func clashIPRule(tag, name, target string) string {
+	line := "RULE-SET," + tag + "," + target
+	if name != "cn" {
+		line += ",no-resolve"
+	}
+	return line
+}
+
+// sing-box does not resolve domain destinations while matching IP rules.
+// Keep the domain match first, then resolve for the domestic IP fallback.
+func singboxDomesticIPRules(siteTags, ipTags []string, target string) []interface{} {
+	route := func(tags []string) map[string]interface{} {
+		rule := map[string]interface{}{"rule_set": tags}
+		if target == "REJECT" {
+			rule["action"] = "reject"
+		} else {
+			rule["outbound"] = ruleTarget(target, "direct")
+		}
+		return rule
+	}
+	return []interface{}{
+		route(siteTags),
+		map[string]interface{}{"action": "resolve"},
+		route(ipTags),
+	}
 }
 
 // ---- Mihomo ----
@@ -260,7 +303,7 @@ func clashRules(opts SubOptions, yamlSets bool) (yamlNode, []interface{}) {
 			rules = append(rules, "RULE-SET,"+provider("site", n)+","+s.target)
 		}
 		for _, n := range s.set.ips {
-			rules = append(rules, "RULE-SET,"+provider("ip", n)+","+s.target+",no-resolve")
+			rules = append(rules, clashIPRule(provider("ip", n), n, s.target))
 		}
 	}
 	return providers, append(rules, "MATCH,"+ruleFinalGroup)
@@ -329,7 +372,12 @@ func singboxRules(opts SubOptions) ([]interface{}, []interface{}, map[string]int
 	}
 	rules := []interface{}{map[string]interface{}{"ip_is_private": true, "outbound": ruleDirectGroup}}
 	for _, s := range ruleSteps(opts) {
-		rule := map[string]interface{}{"rule_set": ruleSetTags(s.set)}
+		tags := ruleSetTags(s.set)
+		if slices.Contains(s.set.ips, "cn") {
+			rules = append(rules, singboxDomesticIPRules(tags[:len(s.set.sites)], tags[len(s.set.sites):], s.target)...)
+			continue
+		}
+		rule := map[string]interface{}{"rule_set": tags}
 		if s.reject {
 			rule["action"] = "reject"
 		} else {
@@ -352,11 +400,27 @@ func singboxRules(opts SubOptions) ([]interface{}, []interface{}, map[string]int
 
 // ---- Surge ----
 
+// Large blackmatrix7 Surge lists split domain rules into a DOMAIN-SET.
+// Keep both files, as documented by their upstream READMEs; the combined
+// _All variants require newer Surge versions.
+func surgeRuleSetLines(name, target string) []string {
+	var lines []string
+	switch name {
+	case "Advertising", "Apple", "China", "Global":
+		lines = append(lines, "DOMAIN-SET,"+listRuleURL("Surge", name, "_Domain.list")+","+target)
+	}
+	url := listRuleURL("Surge", name, ".list")
+	if name == "ChinaIPs" {
+		url = domesticIPListURL("Surge")
+	}
+	return append(lines, "RULE-SET,"+url+","+target)
+}
+
 func surgeRules(opts SubOptions) []string {
 	var lines []string
 	for _, s := range ruleSteps(opts) {
 		for _, n := range s.set.lists {
-			lines = append(lines, "RULE-SET,"+listRuleURL("Surge", n, ".list")+","+s.target)
+			lines = append(lines, surgeRuleSetLines(n, s.target)...)
 		}
 	}
 	return append(lines, "GEOIP,CN,"+ruleDirectGroup, "FINAL,"+ruleFinalGroup+",dns-failed")

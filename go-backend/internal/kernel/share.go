@@ -740,6 +740,12 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 		}
 		rules := []string{"GEOIP,LAN,DIRECT", "FINAL,节点选择"}
 		if opts.Rules {
+			if len(names) > 0 {
+				lines = append(lines, "自动选择 = url-test, "+strings.Join(names, ", ")+
+					", url=http://www.gstatic.com/generate_204, interval=300")
+			} else {
+				lines = append(lines, "自动选择 = select, DIRECT")
+			}
 			for _, g := range rulePolicyGroups(opts, regionNames) {
 				lines = append(lines, g.name+" = select, "+strings.Join(g.members, ", "))
 			}

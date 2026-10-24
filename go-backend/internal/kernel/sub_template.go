@@ -1029,8 +1029,9 @@ func checkSurgeTemplate(content string, names []string) (TemplateSummary, error)
 
 // surgeListed writes out the groups that take every node
 // (include-all-proxies) with the listed nodes only: Surge would add the
-// hidden relay nodes too.
-func surgeListed(lines []string, listed []string) {
+// hidden relay nodes too. Otherwise only empty groups need rewriting, to
+// give them the same DIRECT fallback as Stash and sing-box.
+func surgeListed(lines []string, listed []string, emptyOnly bool) {
 	start, ok := surgeSections(lines)["proxy group"]
 	if !ok {
 		return
@@ -1045,7 +1046,7 @@ func surgeListed(lines []string, listed []string) {
 		}
 		var members, params []string
 		var filter string
-		all := false
+		all, external := false, false
 		for j, f := range splitSurgeFields(rest) {
 			if j == 0 {
 				members = append(members, f)
@@ -1060,6 +1061,7 @@ func surgeListed(lines []string, listed []string) {
 				filter = strings.TrimSpace(v)
 			case kv:
 				params = append(params, f)
+				external = external || k == "policy-path" || k == "include-other-group"
 			default:
 				members = append(members, f)
 			}
@@ -1072,6 +1074,9 @@ func surgeListed(lines []string, listed []string) {
 			picked = nameFilter{include: inc}.apply(listed)
 		}
 		members = append(members, picked...)
+		if emptyOnly && (len(members) > 1 || external) {
+			continue
+		}
 		if len(members) == 1 {
 			members = append(members, "DIRECT") // an empty group is rejected
 		}
@@ -1106,9 +1111,17 @@ func surgeTemplateProfile(content string, endpoints []Endpoint, hideRelays bool)
 		}
 	}
 	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
-	if hidden {
-		surgeListed(lines, listedNames)
+	// include-all also sees proxies explicitly written in the template.
+	if p, ok := surgeSections(lines)["proxy"]; ok {
+		for _, line := range lines[p+1 : surgeSectionEnd(lines, p)] {
+			if !surgeComment(line) {
+				if name, _, ok := strings.Cut(line, "="); ok {
+					listedNames = append(listedNames, strings.TrimSpace(name))
+				}
+			}
+		}
 	}
+	surgeListed(lines, listedNames, !hidden)
 	insert := func(at int, add []string) {
 		lines = append(lines[:at], append(append([]string{}, add...), lines[at:]...)...)
 	}

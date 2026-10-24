@@ -163,7 +163,7 @@ func TestServiceSelectorsDefaultAndRouting(t *testing.T) {
 			if err := json.Unmarshal([]byte(body), &cfg); err != nil {
 				t.Fatal(err)
 			}
-			if cfg.Route.Rules[1]["outbound"] == builderMain || cfg.Route.Rules[2]["outbound"] == "direct" || cfg.Route.Rules[3]["action"] != "reject" || cfg.Route.Final != "漏网之鱼" {
+			if cfg.Route.Rules[1]["outbound"] == builderMain || cfg.Route.Rules[2]["outbound"] == "direct" || cfg.Route.Rules[len(cfg.Route.Rules)-1]["action"] != "reject" || cfg.Route.Final != "漏网之鱼" {
 				t.Fatalf("routing: %s", body)
 			}
 		} else if kind == TemplateClash {

@@ -9,6 +9,8 @@
 - **基础规则**：局域网和国内域名 / IP 走“全球直连”，境外网站走“节点选择”，剩下的走“漏网之鱼”
 - **勾选的分组**：每组是一个可单独选节点的策略组
 
+“漏网之鱼”只接收前面规则都未命中的流量，默认跟随“节点选择”，可在客户端切换为直连或其他节点组。Mihomo / Stash / sing-box 在进入兜底前，会解析未命中域名规则的目标，再按国内 IP 规则判断是否直连；没有收录到域名列表的国内网站也能按 IP 分流。
+
 | 分组 | 默认 | 包含 |
 |------|------|------|
 | 广告拦截 | 拦截 | 常见广告域名（sing-box 里直接拦截，没有可切换的组） |
@@ -25,6 +27,7 @@
 - 打开后自动按地区分组，每个分组都能直接选地区；没有美国节点时，AI 服务默认走节点选择
 - Clash 和 sing-box 还会带上 DNS：国内域名用阿里 / 腾讯 DoH 解析，其余经节点用 Google / Cloudflare DoH 解析，避免 DNS 泄漏；Clash 另开启 fake-ip 和域名嗅探
 - 规则集是 GitHub 上的远程文件，客户端定期自动更新：Clash 用 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) 的 `.mrs`，sing-box 用同一仓库的 `.srs`，Surge、Shadowrocket、Loon、Quantumult X 用 [blackmatrix7/ios_rule_script](https://github.com/blackmatrix7/ios_rule_script) 里对应客户端的规则
+- Surge 的广告、苹果、国内和境外规则会同时引用域名集与其他规则文件，避免漏掉上游拆分保存的域名；Loon 的国内 IP 兜底使用允许解析域名的规则列表
 - Clash 和 sing-box 经“节点选择”下载规则集，在国内也能下载；其余客户端自己下载规则集，网络连不上 GitHub 时规则会暂时缺失
 - **Shadowrocket、Loon、Quantumult X 的节点订阅无法携带规则和策略组**，所以开启后这三个客户端的链接改为下发 **完整配置**（节点直接写在配置里），导入会替换 App 里原来的配置，原来作为节点订阅导入的需要重新导入：
   - Shadowrocket：Clash 格式的配置，点客户端直接导入（`shadowrocket://config/add/`）

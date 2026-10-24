@@ -288,7 +288,11 @@ func buildClashTemplate(b TemplateBuilder) string {
 	for _, g := range b.Groups {
 		members = append(members, g.Name)
 	}
-	members = append(members, "DIRECT")
+	// include-all appends nodes after explicit members. With no node groups,
+	// putting DIRECT here would make all proxy rules default to direct.
+	if len(members) > 0 {
+		members = append(members, "DIRECT")
+	}
 	groups := []interface{}{yamlNode{{"name", builderMain}, {"type", "select"}, {"include-all", true}, {"proxies", members}, {"icon", b.groupIcon(IconMain)}}}
 	for _, g := range b.Groups {
 		v := yamlNode{{"name", g.Name}, {"type", g.Type}, {"include-all", true}}
@@ -335,7 +339,7 @@ func buildClashTemplate(b TemplateBuilder) string {
 				rules = append(rules, "RULE-SET,"+provider("site", n)+","+r.Target)
 			}
 			for _, n := range s.ips {
-				rules = append(rules, "RULE-SET,"+provider("ip", n)+","+r.Target+",no-resolve")
+				rules = append(rules, clashIPRule(provider("ip", n), n, r.Target))
 			}
 		} else {
 			rules = append(rules, builderNativeRule(r))
@@ -403,6 +407,10 @@ func buildSingboxTemplate(b TemplateBuilder) string {
 			for _, n := range s.ips {
 				tags = append(tags, addSet("ip", "geoip", n))
 			}
+			if r.Value == "cn" {
+				rules = append(rules, singboxDomesticIPRules(tags[:len(s.sites)], tags[len(s.sites):], r.Target)...)
+				continue
+			}
 			v["rule_set"] = tags
 		} else {
 			v[r.Type] = []string{r.Value}
@@ -447,7 +455,10 @@ func buildSurgeTemplate(b TemplateBuilder) string {
 	for _, g := range b.Groups {
 		members = append(members, g.Name)
 	}
-	members = append(members, "DIRECT", "include-all-proxies=1", "icon-url="+b.groupIcon(IconMain))
+	if len(members) > 0 {
+		members = append(members, "DIRECT")
+	}
+	members = append(members, "include-all-proxies=1", "icon-url="+b.groupIcon(IconMain))
 	out.WriteString(builderMain + " = select, " + strings.Join(members, ", ") + "\n")
 	for _, g := range b.Groups {
 		line := g.Name + " = " + g.Type + ", include-all-proxies=1"
@@ -475,7 +486,9 @@ func buildSurgeTemplate(b TemplateBuilder) string {
 		r = builderRoutedRule(r, targets)
 		if r.Type == "category" {
 			for _, n := range categories[r.Value].set.lists {
-				out.WriteString("RULE-SET," + listRuleURL("Surge", n, ".list") + "," + r.Target + "\n")
+				for _, line := range surgeRuleSetLines(n, r.Target) {
+					out.WriteString(line + "\n")
+				}
 			}
 		} else {
 			out.WriteString(builderNativeRule(r) + "\n")
