@@ -612,6 +612,7 @@ func (h *Handler) nodeList(w http.ResponseWriter, r *http.Request) {
 	h.syncRemoteNodeStatuses(items)
 	for _, item := range items {
 		id := asInt64(item["id"], 0)
+		item["notifyEvents"] = parseNodeNotifyEvents(asString(item["notifyEvents"]))
 		if c := parseNodeTargetChoice(asString(item["latencyTargets"])); c != nil {
 			item["latencyTargets"] = c
 		} else {

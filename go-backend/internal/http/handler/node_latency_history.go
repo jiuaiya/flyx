@@ -158,7 +158,7 @@ func (h *Handler) alertLatency(results map[int64]reachProbe, names map[int64]str
 			for i, p := range tr.bad {
 				lines[i] = describeLatencyPoint(p)
 			}
-			h.notify(notifyEventLatencyBad, "延迟 / 丢包异常",
+			h.notifyForNode(nodeID, notifyEventLatencyBad, "延迟 / 丢包异常",
 				fmt.Sprintf("服务器：%s\n%s\n（连续 %d 次 %s）", name, strings.Join(lines, "\n"), latencyAlertStreak, limit))
 		}
 		if len(tr.recovered) > 0 {
@@ -166,7 +166,7 @@ func (h *Handler) alertLatency(results map[int64]reachProbe, names map[int64]str
 			for i, p := range tr.recovered {
 				lines[i] = describeLatencyPoint(p)
 			}
-			h.notify(notifyEventLatencyBad, "延迟已恢复",
+			h.notifyForNode(nodeID, notifyEventLatencyBad, "延迟已恢复",
 				fmt.Sprintf("服务器：%s\n%s", name, strings.Join(lines, "\n")))
 		}
 	}

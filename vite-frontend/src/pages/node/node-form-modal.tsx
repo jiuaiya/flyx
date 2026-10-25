@@ -16,6 +16,7 @@ import { Accordion, AccordionItem } from "@/shadcn-bridge/heroui/accordion";
 import { Select, SelectItem } from "@/shadcn-bridge/heroui/select";
 import { type NodeRenewalCycle } from "@/pages/node/renewal";
 import { NodeForm } from "@/pages/node/types";
+import { NODE_NOTIFY_EVENTS } from "@/utils/notification-events";
 
 export interface NodeFormModalProps {
   dialogTitle: string;
@@ -238,6 +239,69 @@ export function NodeFormModal({
 
             {/* 高级配置 */}
             <Accordion className="px-0" variant="light">
+              <AccordionItem
+                key="notifications"
+                aria-label="通知设置"
+                className="[&_[data-slot=accordion-trigger]]:no-underline [&_[data-slot=accordion-trigger]]:hover:no-underline"
+                title={
+                  <span className="text-small text-default-500 font-medium">
+                    通知设置
+                    <span className="ml-2 text-xs font-normal">
+                      {Object.keys(form.notifyEvents).length
+                        ? `已自定义 ${Object.keys(form.notifyEvents).length} 项`
+                        : "跟随全局"}
+                    </span>
+                  </span>
+                }
+              >
+                <div className="space-y-3 pb-3">
+                  <p className="text-xs text-default-500">
+                    仅对这台服务器生效，使用全局推送渠道。需先在「设置 →
+                    通知」启用通知总开关；跟随全局时使用全局事件选择。
+                  </p>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {NODE_NOTIFY_EVENTS.map((event) => (
+                      <Select
+                        key={event.key}
+                        description={
+                          event.key === "latency_bad"
+                            ? "关闭后不推送超时、延迟、丢包及恢复通知，仍保留检测和图表"
+                            : undefined
+                        }
+                        label={event.label}
+                        selectedKeys={[
+                          form.notifyEvents[event.key] === undefined
+                            ? "inherit"
+                            : form.notifyEvents[event.key]
+                              ? "on"
+                              : "off",
+                        ]}
+                        size="sm"
+                        variant="bordered"
+                        onSelectionChange={(keys) => {
+                          const selected = Array.from(keys)[0];
+
+                          setForm((prev) => {
+                            const notifyEvents = { ...prev.notifyEvents };
+
+                            if (selected === "on" || selected === "off") {
+                              notifyEvents[event.key] = selected === "on";
+                            } else {
+                              delete notifyEvents[event.key];
+                            }
+
+                            return { ...prev, notifyEvents };
+                          });
+                        }}
+                      >
+                        <SelectItem key="inherit">跟随全局</SelectItem>
+                        <SelectItem key="on">开启</SelectItem>
+                        <SelectItem key="off">关闭</SelectItem>
+                      </Select>
+                    ))}
+                  </div>
+                </div>
+              </AccordionItem>
               <AccordionItem
                 key="advanced"
                 aria-label="高级配置"

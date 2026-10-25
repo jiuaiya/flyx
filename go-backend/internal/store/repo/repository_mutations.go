@@ -255,7 +255,7 @@ func (r *Repository) GetUserDefaultsForTunnel(userID int64) (flow int64, num int
 	return user.Flow, user.Num, user.ExpTime, user.FlowResetTime, nil
 }
 
-func (r *Repository) CreateNode(name, secret, serverIP string, serverIPV4, serverIPV6, port, interfaceName, version, remark, expiryTime, renewalCycle interface{}, httpFlag, tlsFlag, socksFlag int, now int64, status int, tcpAddr, udpAddr string, inx, isRemote int, remoteURL, remoteToken, remoteConfig, extraIPs interface{}, forwardMode string) error {
+func (r *Repository) CreateNode(name, secret, serverIP string, serverIPV4, serverIPV6, port, interfaceName, version, remark, expiryTime, renewalCycle interface{}, httpFlag, tlsFlag, socksFlag int, now int64, status int, tcpAddr, udpAddr string, inx, isRemote int, remoteURL, remoteToken, remoteConfig, extraIPs interface{}, forwardMode string, notifyEvents *string) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
@@ -287,6 +287,9 @@ func (r *Repository) CreateNode(name, secret, serverIP string, serverIPV4, serve
 		RemoteToken:   nullStringFromInterface(remoteToken),
 		RemoteConfig:  nullStringFromInterface(remoteConfig),
 	}
+	if notifyEvents != nil {
+		node.NotifyEvents = *notifyEvents
+	}
 	return r.db.Create(&node).Error
 }
 
@@ -302,7 +305,7 @@ func (r *Repository) GetNodeStatusFields(nodeID int64) (status, httpFlag, tlsFla
 	return node.Status, node.HTTP, node.TLS, node.Socks, nil
 }
 
-func (r *Repository) UpdateNode(id int64, name, serverIP string, serverIPV4, serverIPV6, port, interfaceName, extraIPs, remark, expiryTime, renewalCycle interface{}, forwardMode string, httpFlag, tlsFlag, socksFlag int, tcpAddr, udpAddr string, now int64) error {
+func (r *Repository) UpdateNode(id int64, name, serverIP string, serverIPV4, serverIPV6, port, interfaceName, extraIPs, remark, expiryTime, renewalCycle interface{}, forwardMode string, httpFlag, tlsFlag, socksFlag int, tcpAddr, udpAddr string, now int64, notifyEvents *string) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
@@ -327,6 +330,9 @@ func (r *Repository) UpdateNode(id int64, name, serverIP string, serverIPV4, ser
 	}
 	if strings.TrimSpace(forwardMode) != "" {
 		updates["forward_mode"] = defaultNodeForwardMode(forwardMode)
+	}
+	if notifyEvents != nil {
+		updates["notify_events"] = *notifyEvents
 	}
 	return r.db.Model(&model.Node{}).
 		Where("id = ?", id).

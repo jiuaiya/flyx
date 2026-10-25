@@ -22,6 +22,11 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	notifyEvents, err := nodeNotifyEventsFromRequest(req)
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	name := asString(req["name"])
 	serverIP := asString(req["serverIp"])
 	if name == "" || serverIP == "" {
@@ -66,6 +71,7 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		nullableText(asString(req["remoteConfig"])),
 		nullableText(asString(req["extraIPs"])),
 		forwardMode,
+		notifyEvents,
 	); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -90,6 +96,11 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	var req map[string]interface{}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
+		return
+	}
+	notifyEvents, err := nodeNotifyEventsFromRequest(req)
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	id := asInt64(req["id"], 0)
@@ -151,6 +162,7 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		defaultString(asString(req["tcpListenAddr"]), "[::]"),
 		defaultString(asString(req["udpListenAddr"]), "[::]"),
 		now,
+		notifyEvents,
 	); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return

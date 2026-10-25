@@ -1,6 +1,7 @@
 import { type NodeRenewalCycle } from "@/pages/node/renewal";
 import { type NodeSystemInfo } from "@/pages/node/system-info";
 import { type InboundProbe } from "@/api/types";
+import { type NodeNotifyEvents } from "@/utils/notification-events";
 
 /** Shapes used by the node page. */
 export interface Node {
@@ -11,6 +12,8 @@ export interface Node {
   latency?: InboundProbe;
   /** The node's own reference points; null follows the defaults. */
   latencyTargets?: { points: string[]; pinned: string[] } | null;
+  /** Missing event overrides follow the global notification settings. */
+  notifyEvents?: NodeNotifyEvents;
   remark?: string;
   expiryTime?: number;
   renewalCycle?: NodeRenewalCycle;
@@ -53,6 +56,7 @@ export interface NodeForm {
   id: number | null;
   name: string;
   remark: string;
+  notifyEvents: NodeNotifyEvents;
   expiryTime: number;
   renewalCycle: NodeRenewalCycle;
   serverHost: string;
