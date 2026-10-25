@@ -212,7 +212,7 @@ export function NodeTuneModal({
                 4 GB。
               </p>
               {!status.automatic && !showDeep && (
-                <p className="rounded-xl bg-warning-50 p-3 text-sm text-warning-700">
+                <p className="rounded-xl bg-warning/10 p-3 text-sm text-warning-800 dark:text-warning-200">
                   这台服务器的 Agent 不支持自动调优，请先升级 Agent。
                 </p>
               )}
@@ -307,7 +307,10 @@ export function NodeTuneModal({
                   </div>
                   {detection.deepSummary && <p>{detection.deepSummary}</p>}
                   {detection.warnings?.map((warning) => (
-                    <p key={warning} className="text-warning-600">
+                    <p
+                      key={warning}
+                      className="text-warning-700 dark:text-warning-300"
+                    >
                       {warning}
                     </p>
                   ))}
@@ -316,7 +319,7 @@ export function NodeTuneModal({
               {showDeep && !running && (
                 <div
                   aria-label="深度优化准备"
-                  className="space-y-3 rounded-xl border border-warning-300 bg-warning-50 p-3 text-xs"
+                  className="space-y-3 rounded-xl border border-warning/25 bg-warning/10 p-3 text-xs text-warning-800 dark:text-warning-200"
                 >
                   <p className="font-medium">
                     深度优化：扫描限速器拐点，按结果决定是否应用出向整形。
