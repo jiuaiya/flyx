@@ -42,6 +42,8 @@ type tuneParams struct {
 	RTTMs         int `json:"rttMs"`
 }
 
+// Only for compatibility with older panels. Automatic jobs always measure
+// bandwidth before applying any parameters; they never use this fallback.
 var defaultTuneParams = tuneParams{BandwidthMbps: 1000, RTTMs: 150}
 
 func (p tuneParams) valid() bool {
@@ -73,25 +75,28 @@ func tuneSizesFor(p tuneParams, ramMB int64) tuneSizes {
 	s.BDP = int64(p.BandwidthMbps) * 1_000_000 / 8 * int64(p.RTTMs) / 1000
 	s.BufMax, s.Reason = 2*s.BDP+2*mib, "带宽 × 延迟 × 2 + 2MB"
 	budget := ramMB * mib / 32
+	if ramMB <= 0 {
+		budget = 4 * mib // Missing memory information must never remove the cap.
+	}
 	if budget > 256*mib {
 		budget = 256 * mib
 	}
-	if ramMB > 0 && s.BufMax > budget {
+	if s.BufMax > budget {
 		s.BufMax, s.Reason = budget, "受内存限制"
 	}
 	if s.BufMax < 4*mib {
 		s.BufMax, s.Reason = 4*mib, "最低 4MB"
 	}
-	pages := ramMB * mib / 4096
+	pages := ramMB * mib / tunePageSize
 	low, pres, max := pages/16, pages/8, pages/4
-	if low < 4096 {
-		low = 4096
+	if low < 16*mib/tunePageSize {
+		low = 16 * mib / tunePageSize
 	}
-	if pres < 8192 {
-		pres = 8192
+	if pres < 32*mib/tunePageSize {
+		pres = 32 * mib / tunePageSize
 	}
-	if max < 16384 {
-		max = 16384
+	if max < 64*mib/tunePageSize {
+		max = 64 * mib / tunePageSize
 	}
 	s.TCPMem = fmt.Sprintf("%d %d %d", low, pres, max)
 	return s
@@ -107,9 +112,14 @@ func tuneGroupsFor(s tuneSizes) []tuneGroup {
 		{"buffer", "按带宽和延迟设缓冲区", "单连接跑满线路；按内存限定上限，小内存机器不会被连接占满", []tuneSetting{
 			{"net.core.rmem_max", bufMax, true},
 			{"net.core.wmem_max", bufMax, true},
+			{"net.core.rmem_default", bufDef, false},
+			{"net.core.wmem_default", bufDef, false},
 			{"net.ipv4.tcp_rmem", "4096 " + bufDef + " " + bufMax, true},
 			{"net.ipv4.tcp_wmem", "4096 " + bufDef + " " + bufMax, true},
 			{"net.ipv4.tcp_mem", s.TCPMem, true},
+			{"net.ipv4.tcp_window_scaling", "1", false},
+			{"net.ipv4.tcp_moderate_rcvbuf", "1", false},
+			{"net.ipv4.tcp_adv_win_scale", "1", false},
 			{"net.ipv4.udp_rmem_min", "16384", true},
 			{"net.ipv4.udp_wmem_min", "16384", true},
 		}},
@@ -121,10 +131,16 @@ func tuneGroupsFor(s tuneSizes) []tuneGroup {
 			{"net.ipv4.tcp_tw_reuse", "1", false},
 			{"net.ipv4.tcp_keepalive_time", "600", false},
 			{"net.ipv4.tcp_syncookies", "1", false},
+			{"net.ipv4.tcp_no_metrics_save", "0", false},
+			{"net.ipv4.tcp_sack", "1", false},
+			{"net.ipv4.tcp_dsack", "1", false},
+			{"net.ipv4.tcp_timestamps", "1", false},
 		}},
 		{"backlog", "高并发", "连接多时不丢新连接，中转出站可用的端口更多", []tuneSetting{
 			{"net.core.somaxconn", "32768", true},
 			{"net.core.netdev_max_backlog", "16384", true},
+			{"net.core.netdev_budget", "600", true},
+			{"net.core.optmem_max", "65536", true},
 			{"net.ipv4.tcp_max_syn_backlog", "16384", true},
 			{"net.netfilter.nf_conntrack_max", "262144", true},
 			// From 10000: well clear of the usual service ports.
@@ -146,6 +162,7 @@ func tuneGroupsFor(s tuneSizes) []tuneGroup {
 // is no longer chosen.
 // Paths are variables so tests can use a temporary tree.
 var (
+	tunePageSize   = int64(os.Getpagesize())
 	tuneProcRoot   = "/proc/sys"
 	tuneConfPath   = "/etc/sysctl.d/99-flyx-tuning.conf"
 	tuneBackupPath = "/etc/flux_agent/tuning-backup.json"
@@ -225,6 +242,9 @@ type tuneGroupStatus struct {
 }
 
 type tuneStatus struct {
+	Automatic  bool              `json:"automatic"`
+	Detection  *tuneDetection    `json:"detection,omitempty"`
+	Job        *tuneJob          `json:"job,omitempty"`
 	Params     tuneParams        `json:"params"`
 	Sizes      tuneSizes         `json:"sizes"`
 	Kernel     string            `json:"kernel"`
@@ -240,8 +260,10 @@ type tuneStatus struct {
 // applied ones, or the defaults, are used.
 func handleTuneCommand(cmdType string, data interface{}) (interface{}, error) {
 	var req struct {
-		Groups  []string `json:"groups"`
-		Restore bool     `json:"restore"`
+		Groups       []string `json:"groups"`
+		Restore      bool     `json:"restore"`
+		Mode         string   `json:"mode"`
+		MaxTrafficGB float64  `json:"maxTrafficGB"`
 		tuneParams
 	}
 	if data != nil {
@@ -260,9 +282,18 @@ func handleTuneCommand(cmdType string, data interface{}) (interface{}, error) {
 		return nil, fmt.Errorf("带宽需在 1–100000 Mbps，延迟需在 1–2000 ms")
 	}
 	switch cmdType {
+	case "TuneStart":
+		return startTuneJob(req.Mode, req.MaxTrafficGB)
+	case "TuneCancel":
+		cancelTuneJob()
+		return readTuneStatus(p), nil
 	case "TuneStatus":
 		return readTuneStatus(p), nil
 	case "TuneApply":
+		if !tuningOperation.TryLock() {
+			return nil, fmt.Errorf("已有调优任务正在运行")
+		}
+		defer tuningOperation.Unlock()
 		if req.Restore {
 			req.Groups = nil
 		}
@@ -309,7 +340,8 @@ func writeSysctl(key, value string) error {
 }
 
 func readTuneStatus(p tuneParams) tuneStatus {
-	st := tuneStatus{Params: p, Sizes: tuneSizesFor(p, readRAMMB())}
+	job := readTuneJob()
+	st := tuneStatus{Automatic: true, Detection: loadTuneDetection(), Job: job, Params: p, Sizes: tuneSizesFor(p, readRAMMB())}
 	if b, err := os.ReadFile(filepath.Join(tuneProcRoot, "kernel/osrelease")); err == nil {
 		st.Kernel = strings.TrimSpace(string(b))
 	}
@@ -378,7 +410,17 @@ func applyTuning(groupIDs []string, p tuneParams) (tuneStatus, error) {
 		}
 	}
 
-	backup := loadTuneBackup()
+	backup := map[string]string{}
+	if b, err := os.ReadFile(tuneBackupPath); err == nil {
+		if err = json.Unmarshal(b, &backup); err != nil {
+			return tuneStatus{}, fmt.Errorf("原参数备份已损坏，已停止以保留恢复信息：%w", err)
+		}
+		if backup == nil {
+			return tuneStatus{}, fmt.Errorf("原参数备份为空，已停止调优以保留恢复信息")
+		}
+	} else if !os.IsNotExist(err) {
+		return tuneStatus{}, err
+	}
 	want := map[string]string{}
 	var confKeys []string
 	for _, g := range groups {
@@ -403,6 +445,20 @@ func applyTuning(groupIDs []string, p tuneParams) (tuneStatus, error) {
 	}
 
 	keys := make([]string, 0, len(backup))
+	// Persist original values before touching /proc. A failed write or agent
+	// restart must not destroy the only copy needed for rollback.
+	if err := os.MkdirAll(filepath.Dir(tuneBackupPath), 0o700); err != nil {
+		return tuneStatus{}, err
+	}
+	if len(backup) > 0 {
+		b, err := json.MarshalIndent(backup, "", "  ")
+		if err != nil {
+			return tuneStatus{}, err
+		}
+		if err = writeFileAtomic(tuneBackupPath, b, 0o600); err != nil {
+			return tuneStatus{}, err
+		}
+	}
 	for k := range backup {
 		keys = append(keys, k)
 	}
@@ -421,7 +477,8 @@ func applyTuning(groupIDs []string, p tuneParams) (tuneStatus, error) {
 			}
 			if tuned {
 				failed[k] = true
-				delete(backup, k) // unchanged, nothing to restore
+				// Retain the original: this key may have been tuned by an
+				// earlier apply, even if the current write failed.
 			}
 			continue
 		}

@@ -25,8 +25,9 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 		Groups []string `json:"groups"`
 		// The line the buffers are sized for; 0 lets the agent use the
 		// last applied values. Older agents ignore them.
-		BandwidthMbps int `json:"bandwidthMbps"`
-		RTTMs         int `json:"rttMs"`
+		BandwidthMbps int     `json:"bandwidthMbps"`
+		RTTMs         int     `json:"rttMs"`
+		MaxTrafficGB  float64 `json:"maxTrafficGB"`
 	}
 	if err := decodeJSON(r.Body, &req); err != nil || req.ID <= 0 {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -44,6 +45,16 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 	command, data := "TuneStatus", line
 	switch req.Action {
 	case "", "status":
+	case "auto", "deep":
+		if req.Action == "deep" && (req.MaxTrafficGB <= 0 || req.MaxTrafficGB > 1000) {
+			response.WriteJSON(w, response.ErrDefault("请先确认深度优化的预计流量"))
+			return
+		}
+		command, data = "TuneStart", map[string]interface{}{"mode": req.Action, "maxTrafficGB": req.MaxTrafficGB}
+	case "cancel":
+		command, data = "TuneCancel", map[string]interface{}{}
+	case "restoreAuto":
+		command, data = "TuneStart", map[string]interface{}{"mode": "restore"}
 	case "apply":
 		if len(req.Groups) == 0 {
 			response.WriteJSON(w, response.ErrDefault("请至少选择一项"))
@@ -65,7 +76,7 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "未知命令类型") {
-			msg = "服务器 agent 版本过旧，不支持调优，请先升级服务器"
+			msg = "服务器 agent 版本过旧，不支持此调优操作，请先升级服务器 Agent"
 		}
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("调优失败: %s", msg)))
 		return

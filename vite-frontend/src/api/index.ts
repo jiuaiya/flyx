@@ -245,6 +245,36 @@ export interface NodeTuneSizes {
   tcpMem: string;
 }
 export interface NodeTuneStatus {
+  automatic?: boolean;
+  detection?: {
+    bandwidthMbps: number;
+    bandwidthSource: string;
+    rttSource: string;
+    interface: string;
+    peer: string;
+    port: number;
+    family: string;
+    measuredAt: number;
+    applied: boolean;
+    before?: NodeTuneSample;
+    single?: NodeTuneSample;
+    parallel?: NodeTuneSample;
+    shapeMbps: number;
+    deepSummary?: string;
+    estimatedGB: number;
+    warnings?: string[];
+  };
+  job?: {
+    id: string;
+    mode: "auto" | "deep" | "restore";
+    state: "running" | "succeeded" | "failed" | "cancelled";
+    stage: string;
+    percent: number;
+    message: string;
+    startedAt: number;
+    finishedAt?: number;
+    logs?: string;
+  };
   /** Missing from agents before line-based sizing. */
   params?: NodeTuneLine;
   sizes?: NodeTuneSizes;
@@ -255,16 +285,27 @@ export interface NodeTuneStatus {
   groups: NodeTuneGroup[];
   warnings?: string[];
 }
-/** Node network tuning (sysctl): read, apply the chosen groups, or restore. */
+export interface NodeTuneSample {
+  mbps: number;
+  retransmits: number;
+  lossPercent: number;
+}
+export type NodeTuneAction =
+  | "status"
+  | "auto"
+  | "deep"
+  | "cancel"
+  | "restoreAuto"
+  | "restore";
+/** Long operations run on the agent; status requests remain short. */
 export const nodeTune = (
   id: number,
-  action: "status" | "apply" | "restore",
-  groups: string[] = [],
-  line?: NodeTuneLine,
+  action: NodeTuneAction,
+  options: { maxTrafficGB?: number } = {},
 ) =>
   Network.post<NodeTuneStatus>(
     "/node/tune",
-    { id, action, groups, ...line },
+    { id, action, ...options },
     { timeout: 40 * 1000 },
   );
 export const testNodeNftables = (nodeId: number) =>
