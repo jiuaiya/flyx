@@ -590,7 +590,7 @@ func setupNftablesHandler(t *testing.T) nftablesTestFixture {
 	if _, err := r.CreateUser("admin", "hash", 0, now+86400000, 1, 1, 100, 1, 0, now); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	if err := r.CreateNode("nft-node", "secret", "198.51.100.10", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, 0, nil, nil, nil, nil, "nftables"); err != nil {
+	if err := r.CreateNode("nft-node", "secret", "198.51.100.10", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, 0, nil, nil, nil, nil, "nftables", nil); err != nil {
 		t.Fatalf("create node: %v", err)
 	}
 	node, err := r.GetNodeRecord(1)

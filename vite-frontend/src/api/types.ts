@@ -1,3 +1,5 @@
+import type { NodeNotifyEvents } from "@/utils/notification-events";
+
 export interface NodeApiItem {
   id: number;
   name: string;
@@ -5,6 +7,7 @@ export interface NodeApiItem {
   forwardMode?: "agent" | "nftables";
   sshConfig?: NodeSshConfigApiItem | null;
   inx?: number;
+  notifyEvents?: NodeNotifyEvents;
   remark?: string;
   expiryTime?: number;
   renewalCycle?: "month" | "quarter" | "year" | "";
@@ -315,6 +318,7 @@ export interface NodeMutationPayload {
   forwardMode?: "agent" | "nftables";
   sshConfig?: NodeSshConfigMutationPayload | null;
   inx?: number;
+  notifyEvents?: NodeNotifyEvents | null;
   remark?: string;
   expiryTime?: number;
   renewalCycle?: "month" | "quarter" | "year" | "";

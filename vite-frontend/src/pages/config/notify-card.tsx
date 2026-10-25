@@ -2,59 +2,12 @@ import { useState } from "react";
 import toast from "react-hot-toast";
 
 import { testNotify } from "@/api";
+import { NOTIFY_EVENTS } from "@/utils/notification-events";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import { Input } from "@/shadcn-bridge/heroui/input";
 import { Switch } from "@/shadcn-bridge/heroui/switch";
 import { Field, SubHeading } from "@/pages/config/section";
-
-const NOTIFY_EVENTS = [
-  {
-    key: "node_offline",
-    label: "服务器掉线 / 恢复",
-    description: "断开超过 90 秒才提醒，重启和升级不打扰",
-  },
-  {
-    key: "inbound_down",
-    label: "节点连不上 / 恢复",
-    description: "连续两次检测失败（约 6 分钟）才提醒",
-  },
-  {
-    key: "latency_bad",
-    label: "延迟 / 丢包异常",
-    description: "某个测试点连续 3 次（约 9 分钟）超过阈值才提醒，恢复时也通知",
-  },
-  {
-    key: "route_change",
-    label: "回程线路变化",
-    description: "例如 CN2 GIA 变成 163，每天检测回程时对比",
-  },
-  {
-    key: "kernel_error",
-    label: "内核运行出错",
-    description: "Xray / sing-box / Snell 报错时提醒",
-  },
-  {
-    key: "node_expiry",
-    label: "服务器即将到期",
-    description: "到期前 3 天提醒一次",
-  },
-  {
-    key: "user_quota",
-    label: "用户流量 / 到期",
-    description: "转发用户流量用到 90%、用完或 3 天内到期，共享用户 3 天内到期",
-  },
-  {
-    key: "backup_failed",
-    label: "Gist 备份失败",
-    description: "自动上传到 GitHub Gist 失败时提醒",
-  },
-  {
-    key: "daily_report",
-    label: "每日汇总",
-    description: "每天定时发一条：服务器在线、出错、流量、共享用户",
-  },
-] as const;
 
 const ALL_EVENT_KEYS = NOTIFY_EVENTS.map((e) => e.key) as string[];
 
@@ -200,7 +153,10 @@ export function NotifySettings({
         {input("notify_webhook_url", "https://example.com/hook")}
       </Field>
 
-      <SubHeading>通知哪些事件</SubHeading>
+      <SubHeading>通知哪些事件（全局默认）</SubHeading>
+      <p className="text-xs text-default-500">
+        可在「服务器 → 编辑 → 通知设置」为单台服务器单独开启或关闭事件。
+      </p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {NOTIFY_EVENTS.map((e) => (
           <Checkbox
@@ -216,47 +172,49 @@ export function NotifySettings({
         ))}
       </div>
 
-      {selected.includes("latency_bad") && (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field help="1–100，默认 20" label="丢包超过">
-            <Input
-              aria-label="丢包阈值"
-              classNames={{
-                input: "text-sm",
-                inputWrapper: changedClass("notify_latency_loss_pct"),
-              }}
-              endContent="%"
-              max={100}
-              min={1}
-              placeholder="20"
-              size="sm"
-              type="number"
-              value={configs.notify_latency_loss_pct ?? ""}
-              variant="bordered"
-              onChange={(e) =>
-                onChange("notify_latency_loss_pct", e.target.value)
-              }
-            />
-          </Field>
-          <Field help="留空不按延迟提醒，只看丢包" label="延迟超过（可选）">
-            <Input
-              aria-label="延迟阈值"
-              classNames={{
-                input: "text-sm",
-                inputWrapper: changedClass("notify_latency_ms"),
-              }}
-              endContent="ms"
-              min={0}
-              placeholder="不限"
-              size="sm"
-              type="number"
-              value={configs.notify_latency_ms ?? ""}
-              variant="bordered"
-              onChange={(e) => onChange("notify_latency_ms", e.target.value)}
-            />
-          </Field>
-        </div>
-      )}
+      <SubHeading>延迟 / 丢包阈值</SubHeading>
+      <p className="text-xs text-default-500">
+        全局及单台服务器开启的延迟 / 丢包通知均使用以下阈值。
+      </p>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field help="1–100，默认 20" label="丢包超过">
+          <Input
+            aria-label="丢包阈值"
+            classNames={{
+              input: "text-sm",
+              inputWrapper: changedClass("notify_latency_loss_pct"),
+            }}
+            endContent="%"
+            max={100}
+            min={1}
+            placeholder="20"
+            size="sm"
+            type="number"
+            value={configs.notify_latency_loss_pct ?? ""}
+            variant="bordered"
+            onChange={(e) =>
+              onChange("notify_latency_loss_pct", e.target.value)
+            }
+          />
+        </Field>
+        <Field help="留空不按延迟提醒，只看丢包" label="延迟超过（可选）">
+          <Input
+            aria-label="延迟阈值"
+            classNames={{
+              input: "text-sm",
+              inputWrapper: changedClass("notify_latency_ms"),
+            }}
+            endContent="ms"
+            min={0}
+            placeholder="不限"
+            size="sm"
+            type="number"
+            value={configs.notify_latency_ms ?? ""}
+            variant="bordered"
+            onChange={(e) => onChange("notify_latency_ms", e.target.value)}
+          />
+        </Field>
+      </div>
 
       {selected.includes("daily_report") && (
         <Field

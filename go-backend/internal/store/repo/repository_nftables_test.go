@@ -41,6 +41,7 @@ func TestNftablesNodeModeSSHConfigAndBindingPersistence(t *testing.T) {
 		nil,
 		nil,
 		"nftables",
+		nil,
 	); err != nil {
 		t.Fatalf("CreateNode: %v", err)
 	}
@@ -190,6 +191,7 @@ func TestNftablesNodeSSHConfigSurvivesRepositoryReopen(t *testing.T) {
 				nil,
 				nil,
 				"nftables",
+				nil,
 			); err != nil {
 				t.Fatalf("CreateNode: %v", err)
 			}
@@ -266,6 +268,7 @@ func TestUpdateNodeWithoutForwardModePreservesExistingMode(t *testing.T) {
 		nil,
 		nil,
 		"nftables",
+		nil,
 	); err != nil {
 		t.Fatalf("CreateNode: %v", err)
 	}
@@ -298,6 +301,7 @@ func TestUpdateNodeWithoutForwardModePreservesExistingMode(t *testing.T) {
 		"[::]",
 		"[::]",
 		now+1,
+		nil,
 	); err != nil {
 		t.Fatalf("UpdateNode: %v", err)
 	}

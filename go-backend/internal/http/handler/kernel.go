@@ -1678,7 +1678,7 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 			if s.Error != "" {
 				msg += "\n错误：" + truncate(s.Error, 300)
 			}
-			h.notify(notifyEventKernelError, "内核运行出错", msg)
+			h.notifyForNode(nodeID, notifyEventKernelError, "内核运行出错", msg)
 		}
 		fields := map[string]interface{}{
 			"status":       newStatus,

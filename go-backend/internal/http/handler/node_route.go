@@ -397,7 +397,7 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 			r.CheckedAt = time.Now().UnixMilli()
 			if prev, ok := h.nodeRoutes.get(nodeID); ok {
 				if changes := routeChanges(prev, r); len(changes) > 0 {
-					h.notify(notifyEventRouteChange, "回程线路变化",
+					h.notifyForNode(nodeID, notifyEventRouteChange, "回程线路变化",
 						fmt.Sprintf("服务器：%s\n%s", name, strings.Join(changes, "\n")))
 				}
 			}

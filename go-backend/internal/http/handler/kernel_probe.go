@@ -334,10 +334,10 @@ func (h *Handler) probeInboundReach(ctx context.Context, ids []int64) (map[int64
 		addr := net.JoinHostPort(hosts[t.row.ID], strconv.Itoa(t.row.Port))
 		if t.down {
 			from := firstNonEmpty(results[t.row.ID].From, "面板服务器")
-			h.notify(notifyEventInboundDown, "节点连不上",
+			h.notifyForNode(t.row.NodeID, notifyEventInboundDown, "节点连不上",
 				fmt.Sprintf("节点：%s\n地址：%s\n原因：%s（从%s检测）", t.row.Name, addr, t.err, from))
 		} else {
-			h.notify(notifyEventInboundDown, "节点已恢复",
+			h.notifyForNode(t.row.NodeID, notifyEventInboundDown, "节点已恢复",
 				fmt.Sprintf("节点：%s\n地址：%s", t.row.Name, addr))
 		}
 	}

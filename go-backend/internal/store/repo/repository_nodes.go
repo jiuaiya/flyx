@@ -128,6 +128,7 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 			"interfaceName":           nullableString(n.InterfaceName),
 			"sshConfig":               sshConfigByNodeID[n.ID],
 			"latencyTargets":          n.LatencyTargets,
+			"notifyEvents":            n.NotifyEvents,
 		})
 	}
 	return items, nil

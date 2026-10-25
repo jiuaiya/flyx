@@ -83,6 +83,41 @@ func TestBackupRoundTripsTunnelProbeTarget(t *testing.T) {
 	}
 }
 
+func TestBackupRoundTripsNodeNotificationOverrides(t *testing.T) {
+	source, err := Open(filepath.Join(t.TempDir(), "source.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	const overrides = `{"latency_bad":false,"node_offline":true}`
+	node := model.Node{Name: "custom-notify", Secret: "secret", ServerIP: "198.51.100.1", NotifyEvents: overrides}
+	if err := source.DB().Create(&node).Error; err != nil {
+		t.Fatal(err)
+	}
+	backup, err := source.ExportAll()
+	if err != nil || len(backup.Nodes) != 1 || backup.Nodes[0].NotifyEvents != overrides {
+		t.Fatalf("exported nodes = %+v, %v", backup, err)
+	}
+	dest, err := Open(filepath.Join(t.TempDir(), "dest.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dest.Close()
+	for i := 0; i < 2; i++ {
+		if _, err := dest.Import(backup, []string{"nodes"}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := dest.GetNodeByID(node.ID)
+		if err != nil || got == nil || got.NotifyEvents != overrides {
+			t.Fatalf("import %d: node = %+v, %v", i, got, err)
+		}
+		// Importing over an existing record must restore the saved preferences too.
+		if err := dest.DB().Model(&model.Node{}).Where("id = ?", node.ID).Update("notify_events", "").Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestExportAllOmitsSensitiveConfigs(t *testing.T) {
 	r, err := Open(filepath.Join(t.TempDir(), "export.db"))
 	if err != nil {

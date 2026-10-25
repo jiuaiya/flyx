@@ -85,6 +85,12 @@ func newNotifier() *notifier {
 // notifyConfig reads the saved settings; ok is false when notifications
 // are off or the event is not selected.
 func (h *Handler) notifyConfig(event string) (notifySettings, string, bool) {
+	return h.notifyConfigForNode(0, event)
+}
+
+// Server overrides replace the event default, while the global master switch
+// and delivery channels still apply to every notification.
+func (h *Handler) notifyConfigForNode(nodeID int64, event string) (notifySettings, string, bool) {
 	cfg, err := h.repo.ListConfigs()
 	if err != nil {
 		return notifySettings{}, "", false
@@ -102,27 +108,38 @@ func (h *Handler) notifyConfig(event string) (notifySettings, string, bool) {
 	if cfg[notifyConfigEnabled] != "true" || settings.empty() {
 		return settings, app, false
 	}
+	selected := true
 	if events := strings.TrimSpace(cfg[notifyConfigEvents]); events != "" {
-		selected := false
+		selected = false
 		for _, e := range strings.Split(events, ",") {
 			if strings.TrimSpace(e) == event {
 				selected = true
 				break
 			}
 		}
-		if !selected {
+	}
+	if nodeID > 0 && isNodeNotifyEvent(event) {
+		node, err := h.repo.GetNodeByID(nodeID)
+		if err != nil || node == nil {
 			return settings, app, false
 		}
+		if enabled, exists := parseNodeNotifyEvents(node.NotifyEvents)[event]; exists {
+			selected = enabled
+		}
 	}
-	return settings, app, true
+	return settings, app, selected
 }
 
 // notify sends an event in the background when it is enabled.
 func (h *Handler) notify(event, title, message string) {
+	h.notifyForNode(0, event, title, message)
+}
+
+func (h *Handler) notifyForNode(nodeID int64, event, title, message string) {
 	if h == nil || h.repo == nil || h.notifier == nil {
 		return
 	}
-	settings, app, ok := h.notifyConfig(event)
+	settings, app, ok := h.notifyConfigForNode(nodeID, event)
 	if !ok {
 		return
 	}
@@ -251,7 +268,7 @@ func (h *Handler) notifyNodeOffline(nodeID int64) {
 		}
 		n.offlineAlerted[nodeID] = true
 		n.mu.Unlock()
-		h.notify(notifyEventNodeOffline, "服务器掉线", "服务器："+h.nodeLabel(nodeID))
+		h.notifyForNode(nodeID, notifyEventNodeOffline, "服务器掉线", "服务器："+h.nodeLabel(nodeID))
 	})
 }
 
@@ -269,7 +286,7 @@ func (h *Handler) notifyNodeOnline(nodeID int64) {
 	delete(n.offlineAlerted, nodeID)
 	n.mu.Unlock()
 	if alerted {
-		h.notify(notifyEventNodeOffline, "服务器恢复在线", "服务器："+h.nodeLabel(nodeID))
+		h.notifyForNode(nodeID, notifyEventNodeOffline, "服务器恢复在线", "服务器："+h.nodeLabel(nodeID))
 	}
 }
 
@@ -309,7 +326,7 @@ func (h *Handler) checkNodeExpiry(now time.Time) {
 			title = "服务器已到期"
 			detail = "已过期"
 		}
-		h.notify(notifyEventNodeExpiry, title, fmt.Sprintf("服务器：%s\n到期：%s（%s）",
+		h.notifyForNode(node.ID, notifyEventNodeExpiry, title, fmt.Sprintf("服务器：%s\n到期：%s（%s）",
 			node.Name, expiry.Format("2006-01-02"), detail))
 	}
 }

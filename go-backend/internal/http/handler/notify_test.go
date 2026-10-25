@@ -51,24 +51,25 @@ func TestNodeOfflineNotifyIsDebounced(t *testing.T) {
 	old := nodeOfflineGrace
 	nodeOfflineGrace = 50 * time.Millisecond
 	t.Cleanup(func() { nodeOfflineGrace = old })
-	h, _, sent := setupNotifyHandler(t)
+	h, r, sent := setupNotifyHandler(t)
+	nodeID := mustCreateLatencyNode(t, r, "offline-test", 0, 0)
 
 	// A quick reconnect within the grace period stays silent.
-	h.notifyNodeOffline(7)
-	h.notifyNodeOnline(7)
+	h.notifyNodeOffline(nodeID)
+	h.notifyNodeOnline(nodeID)
 	if msgs := sent(); len(msgs) != 0 {
 		t.Fatalf("short reconnect must not notify: %v", msgs)
 	}
 
-	h.notifyNodeOffline(7)
+	h.notifyNodeOffline(nodeID)
 	if msgs := sent(); len(msgs) != 1 || msgs[0].Title != "服务器掉线" || msgs[0].Event != notifyEventNodeOffline {
 		t.Fatalf("offline alert: %v", msgs)
 	}
-	h.notifyNodeOffline(7)
+	h.notifyNodeOffline(nodeID)
 	if msgs := sent(); len(msgs) != 1 {
 		t.Fatalf("an ongoing outage must alert once: %v", msgs)
 	}
-	h.notifyNodeOnline(7)
+	h.notifyNodeOnline(nodeID)
 	if msgs := sent(); len(msgs) != 2 || msgs[1].Title != "服务器恢复在线" {
 		t.Fatalf("recovery alert: %v", msgs)
 	}

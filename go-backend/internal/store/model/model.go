@@ -98,6 +98,8 @@ type Node struct {
 	// LatencyTargets is the node's own choice of latency reference points as
 	// JSON {"points":[...],"pinned":[...]}; empty follows the defaults.
 	LatencyTargets string `gorm:"column:latency_targets;type:text;not null;default:''"`
+	// NotifyEvents holds JSON event overrides; absent events follow global settings.
+	NotifyEvents string `gorm:"column:notify_events;type:text;not null;default:''"`
 }
 
 func (Node) TableName() string { return "node" }
@@ -621,6 +623,7 @@ type NodeBackup struct {
 	RemoteConfig  string `json:"remoteConfig,omitempty"`
 	// LatencyTargets is the node's own latency reference point choice.
 	LatencyTargets string `json:"latencyTargets,omitempty"`
+	NotifyEvents   string `json:"notifyEvents,omitempty"`
 }
 
 type TunnelBackup struct {
