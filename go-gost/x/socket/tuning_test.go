@@ -12,6 +12,9 @@ import (
 // skip) at a stock value, and points the tuning paths at it.
 func fakeProcSys(t *testing.T, available string, skip ...string) string {
 	t.Helper()
+	oldPageSize := tunePageSize
+	tunePageSize = 4096
+	t.Cleanup(func() { tunePageSize = oldPageSize })
 	dir := t.TempDir()
 	oldProc, oldConf, oldBackup, oldModprobe := tuneProcRoot, tuneConfPath, tuneBackupPath, tuneModprobe
 	oldParams, oldMem, oldBBR := tuneParamsPath, tuneMeminfo, tuneBBRModule
@@ -231,6 +234,9 @@ func TestTuneLeavesFailedSettingsOutOfConf(t *testing.T) {
 }
 
 func TestTuneSizes(t *testing.T) {
+	oldPageSize := tunePageSize
+	tunePageSize = 4096
+	t.Cleanup(func() { tunePageSize = oldPageSize })
 	for _, c := range []struct {
 		name   string
 		p      tuneParams

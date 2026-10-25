@@ -219,6 +219,7 @@ func NewWebSocketReporter(serverURL string, secret string) *WebSocketReporter {
 
 // Start 启动WebSocket报告器
 func (w *WebSocketReporter) Start() {
+	recoverAutomaticTuningOnStart()
 	w.startTCPPingWorkers()
 	w.workers.Add(2)
 	go func() {
@@ -234,6 +235,9 @@ func (w *WebSocketReporter) Start() {
 // Stop 停止WebSocket报告器
 func (w *WebSocketReporter) Stop() {
 	w.cancel()
+	cancelTuneJob()
+	tuningOperation.Lock()
+	tuningOperation.Unlock()
 	w.connMutex.Lock()
 	if w.conn != nil {
 		w.conn.Close()
@@ -1004,7 +1008,7 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 		// needSaveConfig = false (默认值)
 
 	// 节点调优：读取 / 应用 sysctl 网络参数
-	case "TuneStatus", "TuneApply":
+	case "TuneStatus", "TuneApply", "TuneStart", "TuneCancel":
 		response.Type = cmd.Type + "Response"
 		response.Data, err = handleTuneCommand(cmd.Type, cmd.Data)
 

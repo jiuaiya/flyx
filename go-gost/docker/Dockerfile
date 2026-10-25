@@ -5,7 +5,7 @@ FROM debian:bookworm-slim
 
 # nftables: traffic counters and inbound whitelists; dsniff: tcpkill.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates tzdata nftables dsniff tini \
+  && apt-get install -y --no-install-recommends ca-certificates tzdata nftables dsniff tini bash iperf3 iproute2 coreutils procps gawk \
   && rm -rf /var/lib/apt/lists/*
 
 ARG TARGETARCH
