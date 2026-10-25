@@ -34,14 +34,36 @@ export function NodeTuneModal({
   const lastJob = useRef<NodeTuneStatus["job"]>(undefined);
   const running = status?.job?.state === "running";
   const detection = status?.detection;
-  const trafficBudget = detection
-    ? Math.ceil(detection.estimatedGB * 1.25 * 10) / 10
-    : 0;
-  const deepAvailable = Boolean(
+  const hasRecentMeasurement = Boolean(
     detection?.applied &&
-      Date.now() - detection.measuredAt < 24 * 60 * 60 * 1000 &&
-      trafficBudget <= 1000,
+      Date.now() - detection.measuredAt < 24 * 60 * 60 * 1000,
   );
+  const hasTrafficEstimate = Boolean(
+    detection &&
+      Number.isFinite(detection.estimatedGB) &&
+      detection.estimatedGB > 0,
+  );
+  const trafficBudget =
+    hasTrafficEstimate && detection
+      ? Math.min(1000, Math.ceil(detection.estimatedGB * 1.25 * 10) / 10)
+      : 0;
+  const deepAvailable = Boolean(
+    status?.automatic &&
+      hasRecentMeasurement &&
+      hasTrafficEstimate &&
+      detection &&
+      detection.estimatedGB <= 1000,
+  );
+  const needsMeasurement = !hasRecentMeasurement || !hasTrafficEstimate;
+  const deepPreparationMessage = !status?.automatic
+    ? "这台服务器的 Agent 需要升级。请关闭窗口，在服务器操作菜单中升级 Agent，再重新打开调优。"
+    : !detection?.applied
+      ? "还没有自动测速结果。先完成自动调优，再确认流量开始深度扫描。"
+      : !hasRecentMeasurement
+        ? "上次测速已超过 24 小时，需要先重新自动调优，再确认流量开始深度扫描。"
+        : !hasTrafficEstimate
+          ? "上次测速缺少有效的流量估算，需要先重新自动调优。"
+          : `本次预计流量约 ${detection.estimatedGB.toFixed(1)} GB，超过 1000 GB 上限，暂不能开始深度扫描。`;
 
   useEffect(() => {
     const current = ++generation.current;
@@ -117,7 +139,7 @@ export function NodeTuneModal({
     lastJob.current = job;
   }, [status?.job]);
 
-  const run = async (action: NodeTuneAction) => {
+  const run = async (action: NodeTuneAction, continueToDeep = false) => {
     if (!node) return;
     const current = generation.current;
 
@@ -132,12 +154,15 @@ export function NodeTuneModal({
 
       if (generation.current !== current) return;
       if (res.code !== 0 || !res.data) {
-        toast.error(res.msg || "调优请求失败");
+        const message = res.msg || "调优请求失败";
+
+        setError(message);
+        toast.error(message);
 
         return;
       }
       setStatus(res.data);
-      setShowDeep(false);
+      setShowDeep(continueToDeep);
       setAllowTraffic(false);
     } catch {
       if (generation.current === current)
@@ -186,7 +211,7 @@ export function NodeTuneModal({
                 自动实测带宽，结合内存计算参数，无需填写带宽和延迟。首次会安装所需的测速依赖。测速流量发往公共对端，千兆线路基础测速约消耗
                 4 GB。
               </p>
-              {!status.automatic && (
+              {!status.automatic && !showDeep && (
                 <p className="rounded-xl bg-warning-50 p-3 text-sm text-warning-700">
                   这台服务器的 Agent 不支持自动调优，请先升级 Agent。
                 </p>
@@ -214,6 +239,11 @@ export function NodeTuneModal({
                   {running && (
                     <p className="text-xs text-default-500">
                       关闭窗口后任务继续运行，重新打开可查看进度。
+                    </p>
+                  )}
+                  {running && showDeep && status.job.mode === "auto" && (
+                    <p className="text-xs text-default-500">
+                      正在完成第一步自动调优；完成后会显示流量确认，不会直接开始深度扫描。
                     </p>
                   )}
                   {status.job.logs && (
@@ -283,30 +313,63 @@ export function NodeTuneModal({
                   ))}
                 </div>
               )}
-              {showDeep && detection && (
-                <div className="space-y-3 rounded-xl border border-warning-300 bg-warning-50 p-3 text-xs">
+              {showDeep && !running && (
+                <div
+                  aria-label="深度优化准备"
+                  className="space-y-3 rounded-xl border border-warning-300 bg-warning-50 p-3 text-xs"
+                >
                   <p className="font-medium">
                     深度优化：扫描限速器拐点，按结果决定是否应用出向整形。
                   </p>
-                  <p>
-                    预计流量约 {detection.estimatedGB.toFixed(1)} GB，本次预算{" "}
-                    {trafficBudget.toFixed(1)}{" "}
-                    GB，达到预算会停止。过程可能需要数分钟，线路业务流量也会计入预算。
-                  </p>
-                  <Checkbox
-                    isSelected={allowTraffic}
-                    size="sm"
-                    onValueChange={setAllowTraffic}
-                  >
-                    允许本次测速使用上述流量
-                  </Checkbox>
+                  {deepAvailable && detection ? (
+                    <>
+                      <p>
+                        预计流量约 {detection.estimatedGB.toFixed(1)}{" "}
+                        GB，本次预算 {trafficBudget.toFixed(1)}{" "}
+                        GB，达到预算会停止。过程可能需要数分钟，线路业务流量也会计入预算。
+                      </p>
+                      <Checkbox
+                        isSelected={allowTraffic}
+                        size="sm"
+                        onValueChange={setAllowTraffic}
+                      >
+                        允许本次测速使用上述流量
+                      </Checkbox>
+                      <Button
+                        color="warning"
+                        isDisabled={!allowTraffic || running || busy !== ""}
+                        size="sm"
+                        onPress={() => void run("deep")}
+                      >
+                        开始深度优化
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <p role="status">{deepPreparationMessage}</p>
+                      {status.automatic && needsMeasurement && (
+                        <Button
+                          color="primary"
+                          isDisabled={busy !== ""}
+                          isLoading={busy === "auto"}
+                          size="sm"
+                          onPress={() => void run("auto", true)}
+                        >
+                          自动调优并继续
+                        </Button>
+                      )}
+                    </>
+                  )}
                   <Button
-                    color="warning"
-                    isDisabled={!allowTraffic || running || busy !== ""}
+                    isDisabled={busy !== ""}
                     size="sm"
-                    onPress={() => void run("deep")}
+                    variant="light"
+                    onPress={() => {
+                      setShowDeep(false);
+                      setAllowTraffic(false);
+                    }}
                   >
-                    开始深度优化
+                    关闭引导
                   </Button>
                 </div>
               )}
@@ -377,7 +440,7 @@ export function NodeTuneModal({
           ) : (
             <>
               <Button
-                isDisabled={!status?.automatic || !deepAvailable || busy !== ""}
+                isDisabled={!status || busy !== ""}
                 variant="bordered"
                 onPress={() => {
                   setShowDeep(!showDeep);
