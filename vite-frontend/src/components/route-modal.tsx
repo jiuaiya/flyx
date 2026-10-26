@@ -1,4 +1,4 @@
-import type { NodeRoute, NodeRouteHop } from "@/api/types";
+import type { NodeRoute, NodeRouteHop, RouteLabelMetadata } from "@/api/types";
 
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
@@ -66,9 +66,11 @@ const NET_LABEL: Record<string, string> = { CT: "电信" };
 export function RouteTag({
   route,
   short,
+  info,
 }: {
   route?: string;
   short?: boolean;
+  info?: RouteLabelMetadata;
 }) {
   if (!route || route === "未识别") return null;
   const [tag, cls] = ROUTES[route] ?? [
@@ -78,10 +80,21 @@ export function RouteTag({
 
   return (
     <span
-      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded px-1 font-sans text-[10px] font-medium leading-4 ${cls}`}
-      title={`回程 ${route}`}
+      className={`inline-flex min-w-0 max-w-full items-center whitespace-nowrap rounded px-1 font-sans text-[10px] font-medium leading-4 ${cls}`}
+      title={[
+        `回程 ${route}`,
+        info?.updatedAt
+          ? `上次识别：${new Date(info.updatedAt).toLocaleString()}`
+          : "",
+        info?.stale ? `保留上次结果：${info.reason || "等待重新检测"}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n")}
     >
-      {short ? tag : route}
+      <span className="truncate">{short ? tag : route}</span>
+      {info?.stale && (
+        <span className="ml-1 shrink-0 font-normal opacity-70">上次</span>
+      )}
     </span>
   );
 }
@@ -222,27 +235,46 @@ export function RouteModal({
                             {label}
                           </span>
                         )}
-                        {leg.error ? (
+                        {leg.route && leg.route !== "未识别" ? (
+                          <span className="min-w-0 overflow-x-auto">
+                            <RouteTag
+                              info={{
+                                updatedAt: leg.routeUpdatedAt,
+                                stale: leg.stale,
+                                reason: leg.error || leg.detail,
+                              }}
+                              route={leg.route}
+                            />
+                          </span>
+                        ) : leg.error ? (
                           <span className="min-w-0 text-xs text-rose-600">
                             {leg.error}
-                          </span>
-                        ) : leg.route && leg.route !== "未识别" ? (
-                          <span className="min-w-0 overflow-x-auto">
-                            <RouteTag route={leg.route} />
                           </span>
                         ) : (
                           <span className="text-xs text-default-400">
                             未识别线路
                           </span>
                         )}
-                        {!leg.error && (
+                        {(!leg.error || leg.stale) && (
                           <span className="ml-auto text-xs text-default-400">
                             {leg.hops?.length ?? 0} 跳{" "}
                             {open === key ? "▴" : "▾"}
                           </span>
                         )}
                       </button>
-                      {open === key && !leg.error && (
+                      {(leg.stale || leg.routeUpdatedAt) && (
+                        <p
+                          className={`px-3 pb-2 text-xs ${leg.stale ? "text-amber-700 dark:text-amber-400" : "text-default-400"}`}
+                        >
+                          {leg.routeUpdatedAt
+                            ? `线路识别于 ${ago(leg.routeUpdatedAt)}`
+                            : "保留上次识别的线路"}
+                          {leg.stale
+                            ? ` · ${leg.error || "本次未确认，等待重新检测"}`
+                            : ""}
+                        </p>
+                      )}
+                      {open === key && (!leg.error || leg.stale) && (
                         <div className="border-t border-divider px-3 py-2">
                           {(leg.protocol || leg.detail) && (
                             <p className="pb-2 text-xs text-default-500">
@@ -255,7 +287,7 @@ export function RouteModal({
                           {(leg.hops ?? []).map((h) => (
                             <HopRow key={h.ttl} hop={h} />
                           ))}
-                          {!leg.reached && (
+                          {!leg.reached && !leg.error && (
                             <p className="pt-1 text-xs text-default-400">
                               未确认到达目标，只显示到最后一个有回应的路由器
                             </p>
@@ -273,7 +305,7 @@ export function RouteModal({
             ASN 和已知骨干网段识别；跨运营商路径按经过顺序显示。隐藏跳点可能影响
             CN2 GIA / GT
             等判断，结果仅反映本次路径特征。每天自动检测，失败或未识别时 6
-            小时后重试。
+            小时后重试。临时失败时保留上次有效线路并标记“上次”，面板重启后也会保留。
           </p>
         </ModalBody>
         <ModalFooter>

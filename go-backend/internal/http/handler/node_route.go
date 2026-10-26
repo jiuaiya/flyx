@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"sort"
@@ -131,6 +132,10 @@ type routePoint struct {
 	Reached  bool   `json:"reached"`
 	Protocol string `json:"protocol,omitempty"`
 	Detail   string `json:"detail,omitempty"`
+	// RouteUpdatedAt is the last successful identification, not the latest
+	// attempt. Stale explicitly marks a retained identification.
+	RouteUpdatedAt int64 `json:"routeUpdatedAt,omitempty"`
+	Stale          bool  `json:"stale,omitempty"`
 	// Family is "IPv6" when the route was traced over IPv6.
 	Family string     `json:"family,omitempty"`
 	Hops   []routeHop `json:"hops,omitempty"`
@@ -150,7 +155,8 @@ type nodeRoute struct {
 	failed    bool
 	// agent is the node's agent version when traced, so an upgraded agent
 	// (one that gained Traceroute, say) is traced again right away.
-	agent string
+	agent    string
+	identity string
 }
 
 type nodeRouteStore struct {
@@ -332,7 +338,13 @@ func betterRoutePoint(candidate, current routePoint) bool {
 func traceIPv6Leg(h *Handler, nodeID int64, t latencyTarget) *routePoint {
 	data, err := nodeTraceroute(h, nodeID, t, 6)
 	if err != nil {
-		return nil
+		// Absence of IPv6 is different from a temporary failed probe.
+		if strings.Contains(err.Error(), "没有 IPv6 地址") || strings.Contains(err.Error(), "没有 IPv6 路由") {
+			return nil
+		}
+		leg := routePointFrom(t, nil, err)
+		leg.Family = "IPv6"
+		return &leg
 	}
 	leg := routePointFrom(t, data, nil)
 	if leg.Family != "IPv6" {
@@ -359,9 +371,10 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 	}
 	now := time.Now()
 	type job struct {
-		targets []latencyTarget
-		agent   string
-		name    string
+		targets  []latencyTarget
+		agent    string
+		name     string
+		identity string
 	}
 	todo := make(map[int64]job)
 	for _, n := range nodes {
@@ -374,11 +387,11 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 		}
 		agent := n.Version.String
 		if !force {
-			if r, ok := h.nodeRoutes.get(n.ID); ok && routeFresh(r, targets, agent, now) {
+			if r, ok := h.nodeRoutes.get(n.ID); ok && r.identity == routeNodeIdentity(n) && routeFresh(r, targets, agent, now) {
 				continue
 			}
 		}
-		todo[n.ID] = job{targets: targets, agent: agent, name: n.Name}
+		todo[n.ID] = job{targets: targets, agent: agent, name: n.Name, identity: routeNodeIdentity(n)}
 	}
 
 	results := make(map[int64]nodeRoute, len(todo))
@@ -396,7 +409,7 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 			return results, ctx.Err()
 		}
 		wg.Add(1)
-		go func(nodeID int64, targets []latencyTarget, agent, name string) {
+		go func(nodeID int64, targets []latencyTarget, agent, name, identity string) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			done, owner := h.nodeRoutes.begin(nodeID)
@@ -413,7 +426,7 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 				return
 			}
 			defer h.nodeRoutes.finish(nodeID)
-			r := nodeRoute{Points: make([]routePoint, len(targets)), agent: agent}
+			r := nodeRoute{Points: make([]routePoint, len(targets)), agent: agent, identity: identity}
 			// Probes match their own IDs/ports, so a few targets can run in
 			// parallel without confusing replies or making nine points take
 			// several minutes. Stay below the agent's four-trace limit.
@@ -446,24 +459,32 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 				r.failed = r.failed || routeNeedsRetry(p)
 			}
 			r.CheckedAt = time.Now().UnixMilli()
-			if prev, ok := h.nodeRoutes.get(nodeID); ok {
+			prev, hadPrevious := h.nodeRoutes.get(nodeID)
+			if !hadPrevious || prev.identity != identity {
+				prev = nodeRoute{}
+			}
+			r = retainRouteIdentifications(prev, r)
+			if hadPrevious && prev.identity == identity {
 				if changes := routeChanges(prev, r); len(changes) > 0 {
 					h.notifyForNode(nodeID, notifyEventRouteChange, "回程线路变化",
 						fmt.Sprintf("服务器：%s\n%s", name, strings.Join(changes, "\n")))
 				}
 			}
 			h.nodeRoutes.set(nodeID, r)
+			if err := h.persistNodeRoute(nodeID, r); err != nil {
+				log.Printf("save node route snapshot node=%d: %v", nodeID, err)
+			}
 			mu.Lock()
 			results[nodeID] = r
 			mu.Unlock()
-		}(id, j.targets, j.agent, j.name)
+		}(id, j.targets, j.agent, j.name, j.identity)
 	}
 	wg.Wait()
 	return results, ctx.Err()
 }
 
 func routeNeedsRetry(p routePoint) bool {
-	return p.Error != "" || p.Route == "" || p.Route == "未识别" || p.asnIncomplete ||
+	return p.Error != "" || p.Route == "" || p.Route == "未识别" || p.Stale || p.asnIncomplete ||
 		(p.IPv6 != nil && routeNeedsRetry(*p.IPv6))
 }
 
@@ -503,9 +524,14 @@ func (h *Handler) withRoutes(nodeID int64, p reachProbe) reachProbe {
 	points := make([]latencyPoint, len(p.Points))
 	for i, pt := range p.Points {
 		rp := byName[pt.Name]
+		if pt.host != "" && (pt.host != rp.host || pt.port != rp.port) {
+			rp = routePoint{}
+		}
 		pt.Route, pt.RouteV6 = rp.Route, ""
-		if rp.IPv6 != nil && rp.IPv6.Error == "" {
+		pt.RouteInfo, pt.RouteV6Info = routeLabelInfo(rp, r.CheckedAt), nil
+		if rp.IPv6 != nil {
 			pt.RouteV6 = rp.IPv6.Route
+			pt.RouteV6Info = routeLabelInfo(*rp.IPv6, r.CheckedAt)
 		}
 		points[i] = pt
 	}
@@ -556,5 +582,10 @@ func (h *Handler) nodeRouteRespond(w http.ResponseWriter, r *http.Request, probe
 		response.WriteJSON(w, response.OK(nil))
 		return
 	}
+	points := make([]routePoint, len(route.Points))
+	for i, p := range route.Points {
+		points[i] = routeLegView(p, time.Now())
+	}
+	route.Points = points
 	response.WriteJSON(w, response.OK(route))
 }

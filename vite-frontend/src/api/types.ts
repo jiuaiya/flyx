@@ -789,6 +789,16 @@ export interface InboundProbePoint {
   route?: string;
   /** The IPv6 return route of a dual-stack node, when traced. */
   routeV6?: string;
+  routeInfo?: RouteLabelMetadata;
+  routeV6Info?: RouteLabelMetadata;
+}
+
+export interface RouteLabelMetadata {
+  updatedAt?: number;
+  checkedAt?: number;
+  stale?: boolean;
+  reason?: string;
+  family?: string;
 }
 
 export interface NodeRouteHop {
@@ -806,6 +816,8 @@ export interface NodeRoutePoint {
   reached: boolean;
   protocol?: "tcp" | "icmp";
   detail?: string;
+  routeUpdatedAt?: number;
+  stale?: boolean;
   /** "IPv6" when traced over IPv6. */
   family?: string;
   hops?: NodeRouteHop[];

@@ -80,7 +80,11 @@ type latencyPoint struct {
 	// Route names the return route to this point (node_route.go).
 	Route string `json:"route,omitempty"`
 	// RouteV6 is a dual-stack node's IPv6 return route.
-	RouteV6 string `json:"routeV6,omitempty"`
+	RouteV6     string              `json:"routeV6,omitempty"`
+	RouteInfo   *routeLabelMetadata `json:"routeInfo,omitempty"`
+	RouteV6Info *routeLabelMetadata `json:"routeV6Info,omitempty"`
+	host        string
+	port        int
 }
 
 // parseLatencyTargets validates and normalizes the configured reference
@@ -278,7 +282,7 @@ var nodeLatencyPing = func(h *Handler, nodeID int64, host string, port int) (map
 }
 
 func latencyPointFrom(t latencyTarget, data map[string]interface{}, err error) latencyPoint {
-	p := latencyPoint{Name: t.Name, Pinned: t.Pinned}
+	p := latencyPoint{Name: t.Name, Pinned: t.Pinned, host: t.Host, port: t.Port}
 	if err != nil {
 		p.Error = latencyCommandError(err)
 		return p

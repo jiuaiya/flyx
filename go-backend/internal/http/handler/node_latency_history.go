@@ -190,25 +190,41 @@ func latencyIncidentKeys(nodeID int64, points []latencyPoint) []string {
 // routeChanges lists the points whose identified line changed between two
 // traces; unidentified or failed traces are not a change.
 func routeChanges(prev, next nodeRoute) []string {
-	known := func(p *routePoint) bool { return p != nil && p.Error == "" && p.Route != "" && p.Route != "未识别" }
-	before := make(map[string]string, len(prev.Points)*2)
-	for _, p := range prev.Points {
-		if known(&p) {
-			before[p.Name] = p.Route
-		}
-		if known(p.IPv6) {
-			before[p.Name+"/v6"] = p.IPv6.Route
+	// Compare the last valid identification across temporary failures,
+	// and never report a retained label as a newly observed change.
+	eachLeg := func(r nodeRoute, visit func(string, routePoint)) {
+		for _, p := range r.Points {
+			family := "v4"
+			if p.Family == "IPv6" {
+				family = "v6"
+			}
+			visit(p.Name+"/"+family, p)
+			if p.IPv6 != nil {
+				visit(p.Name+"/v6", *p.IPv6)
+			}
 		}
 	}
+	before := make(map[string]routePoint)
+	eachLeg(prev, func(key string, p routePoint) {
+		if identifiedRoute(p) && (p.Error == "" || p.Stale) {
+			before[key] = p
+		}
+	})
 	var out []string
-	for _, p := range next.Points {
-		if was, ok := before[p.Name]; ok && known(&p) && p.Route != was {
-			out = append(out, fmt.Sprintf("%s：%s → %s", p.Name, was, p.Route))
+	eachLeg(next, func(key string, p routePoint) {
+		old, ok := before[key]
+		if !ok || p.Stale || p.Error != "" || !identifiedRoute(p) || p.Route == old.Route {
+			return
 		}
-		if was, ok := before[p.Name+"/v6"]; ok && known(p.IPv6) && p.IPv6.Route != was {
-			out = append(out, fmt.Sprintf("%s（IPv6）：%s → %s", p.Name, was, p.IPv6.Route))
+		if old.host != p.host || old.port != p.port {
+			return
 		}
-	}
+		name := p.Name
+		if strings.HasSuffix(key, "/v6") {
+			name += "（IPv6）"
+		}
+		out = append(out, fmt.Sprintf("%s：%s → %s", name, old.Route, p.Route))
+	})
 	return out
 }
 

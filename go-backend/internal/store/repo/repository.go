@@ -252,6 +252,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.SubscriptionTemplate{},
 		&model.NodeGroup{},
 		&model.NodeLatencySample{},
+		&model.NodeRouteSnapshot{},
 	}
 
 	if db.Dialector.Name() != "sqlite" {

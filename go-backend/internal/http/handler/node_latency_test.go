@@ -111,9 +111,9 @@ func TestProbeNodeLatencyMeasuresOnlineLocalNodes(t *testing.T) {
 		t.Fatalf("summary = %+v", p)
 	}
 	want := []latencyPoint{
-		{Name: "电信", Pinned: true, OK: true, LatencyMs: 38, LossPct: 25},
-		{Name: "联通", Error: "测试点连接失败"},
-		{Name: "移动", Error: "服务器响应超时"},
+		{Name: "电信", Pinned: true, OK: true, LatencyMs: 38, LossPct: 25, host: "ct.example.com", port: 80},
+		{Name: "联通", Error: "测试点连接失败", host: "cu.example.com", port: 80},
+		{Name: "移动", Error: "服务器响应超时", host: "cm.example.com", port: 80},
 	}
 	for i, w := range want {
 		if p.Points[i] != w {

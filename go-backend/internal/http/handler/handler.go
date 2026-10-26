@@ -136,6 +136,7 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		notifier:                 newNotifier(),
 		pingSlots:                newNodePingSlots(),
 	}
+	h.restoreNodeRoutes()
 	h.healthCheck = health.NewChecker(repo, h.wsServer)
 	h.qualityProber = newTunnelQualityProber(h)
 	h.wsServer.SetNodeOnlineHook(h.onNodeOnline)

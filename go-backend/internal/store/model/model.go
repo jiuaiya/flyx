@@ -1014,6 +1014,15 @@ type NodeLatencySample struct {
 
 func (NodeLatencySample) TableName() string { return "node_latency_sample" }
 
+// NodeRouteSnapshot retains one current return-route snapshot per node.
+// The payload is JSON text so SQLite and PostgreSQL use the same schema.
+type NodeRouteSnapshot struct {
+	NodeID int64  `gorm:"column:node_id;primaryKey;autoIncrement:false"`
+	Data   string `gorm:"column:data;type:text;not null"`
+}
+
+func (NodeRouteSnapshot) TableName() string { return "node_route_snapshot" }
+
 // PeerShareResource is the durable desired state for a namespaced peer command.
 // Rows are retained as tombstones until deletion has been acknowledged.
 type PeerShareResource struct {

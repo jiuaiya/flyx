@@ -161,9 +161,11 @@ function Pill({
 function Tile({
   point,
   spinning,
+  showRouteState,
 }: {
   point: InboundProbePoint;
   spinning?: boolean;
+  showRouteState?: boolean;
 }) {
   const [pill, dot] = TONE[pointTone(point)];
   const loss = point.ok ? (point.lossPct ?? 0) : 0;
@@ -187,30 +189,81 @@ function Tile({
         )}
       </span>
       {/* Always its own line so tiles line up whatever the width. */}
-      {point.route && point.route !== "未识别" && (
-        <span className="mt-0.5 flex items-center gap-1">
-          <RouteTag short route={point.route} />
-          <V6Route point={point} />
-        </span>
-      )}
+      <PointRoutes pending={showRouteState} point={point} />
     </span>
   );
 }
 
-/** A dual-stack node's IPv6 route, shown only when it differs from IPv4. */
-function V6Route({ point }: { point: InboundProbePoint }) {
-  if (
-    !point.routeV6 ||
-    point.routeV6 === "未识别" ||
-    point.routeV6 === point.route
-  ) {
-    return null;
-  }
+/** Each IP family can show a route independently, with its own freshness. */
+function PointRoutes({
+  point,
+  details,
+  pending,
+}: {
+  point: InboundProbePoint;
+  details?: boolean;
+  pending?: boolean;
+}) {
+  const known = (route?: string) => !!route && route !== "未识别";
+  const hasPrimary = known(point.route);
+  const hasV6 =
+    known(point.routeV6) &&
+    (!hasPrimary ||
+      point.routeV6 !== point.route ||
+      !!point.routeInfo?.stale !== !!point.routeV6Info?.stale);
+  const primaryFamily = point.routeInfo?.family === "IPv6" ? "IPv6" : "IPv4";
+  const labels = [
+    ...(hasPrimary
+      ? [{ route: point.route, info: point.routeInfo, family: primaryFamily }]
+      : []),
+    ...(hasV6
+      ? [{ route: point.routeV6, info: point.routeV6Info, family: "IPv6" }]
+      : []),
+  ];
+
+  if (labels.length === 0 && !pending) return null;
 
   return (
-    <span className="inline-flex items-center gap-0.5">
-      <span className="text-[10px] opacity-70">v6</span>
-      <RouteTag short route={point.routeV6} />
+    <span className="mt-0.5 block min-w-0">
+      <span className="flex min-w-0 flex-wrap items-center gap-1">
+        {labels.map(({ route, info, family }) => (
+          <span
+            key={family}
+            className="inline-flex min-w-0 max-w-full items-center gap-0.5"
+          >
+            {family === "IPv6" && (
+              <span className="shrink-0 text-[10px] opacity-70">v6</span>
+            )}
+            <RouteTag short info={info} route={route} />
+          </span>
+        ))}
+        {labels.length === 0 && (
+          <span
+            className="text-[10px] opacity-70"
+            title={point.routeInfo?.reason}
+          >
+            {point.routeInfo ? "回程未识别" : "回程待检测"}
+          </span>
+        )}
+      </span>
+      {details &&
+        labels.map(({ info, family }) =>
+          info && (info.updatedAt || info.stale) ? (
+            <span
+              key={family}
+              className={`mt-0.5 block whitespace-normal text-[10px] leading-4 ${info.stale ? "text-amber-700 dark:text-amber-400" : "text-default-400"}`}
+            >
+              {family}
+              {info.updatedAt ? ` · ${ago(info.updatedAt)}识别` : ""}
+              {info.stale ? ` · ${info.reason || "等待重新检测"}` : ""}
+            </span>
+          ) : null,
+        )}
+      {details && labels.length === 0 && point.routeInfo?.reason && (
+        <span className="mt-0.5 block whitespace-normal text-[10px] leading-4 text-default-400">
+          {point.routeInfo.reason}
+        </span>
+      )}
     </span>
   );
 }
@@ -314,7 +367,12 @@ export function LatencyCell({
               }}
             >
               {shown.map((p, i) => (
-                <Tile key={p.name} point={p} spinning={probing && i === 0} />
+                <Tile
+                  key={p.name}
+                  point={p}
+                  showRouteState={!!onShowRoute}
+                  spinning={probing && i === 0}
+                />
               ))}
             </span>
           </button>
@@ -388,13 +446,14 @@ export function LatencyCell({
                   key={p.name}
                   className="flex items-center justify-between gap-2 text-sm"
                 >
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
-                    <span className="shrink-0">{p.name}</span>
-                    <span className="flex min-w-0 flex-wrap items-center gap-1">
-                      <RouteTag short route={p.route} />
-                      <V6Route point={p} />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span
+                        className={`h-2 w-2 shrink-0 rounded-full ${dot}`}
+                      />
+                      <span className="truncate">{p.name}</span>
                     </span>
+                    <PointRoutes details pending={!!onShowRoute} point={p} />
                   </span>
                   <span className="shrink-0 font-mono text-xs">
                     <span className={TONE[pointTone(p)][0].split(" ")[1]}>
