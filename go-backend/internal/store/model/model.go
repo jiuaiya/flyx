@@ -528,6 +528,7 @@ type InboundBackup struct {
 	Inx                 int    `json:"inx"`
 	CreatedTime         int64  `json:"createdTime"`
 	SourceID            int64  `json:"sourceId,omitempty"`
+	ImportedName        string `json:"importedName,omitempty"`
 	OutboundID          int64  `json:"outboundId,omitempty"`
 	SplitRules          string `json:"splitRules,omitempty"`
 }
@@ -623,7 +624,9 @@ type NodeBackup struct {
 	RemoteConfig  string `json:"remoteConfig,omitempty"`
 	// LatencyTargets is the node's own latency reference point choice.
 	LatencyTargets string `json:"latencyTargets,omitempty"`
-	NotifyEvents   string `json:"notifyEvents,omitempty"`
+	// NotifyEvents is nil in backups made before per-server notifications;
+	// restoring such a backup keeps the saved overrides.
+	NotifyEvents *string `json:"notifyEvents,omitempty"`
 }
 
 type TunnelBackup struct {
