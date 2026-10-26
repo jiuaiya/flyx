@@ -35,6 +35,15 @@ const ROUTES: Record<string, [string, string]> = {
     "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
   ],
   "移动 CMI": ["CMI", "bg-teal-500/15 text-teal-700 dark:text-teal-400"],
+  "移动 9808": ["9808", "bg-teal-500/15 text-teal-700 dark:text-teal-400"],
+  "电信 CTGNet": [
+    "CTGNet",
+    "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+  ],
+  "联通 10099": [
+    "10099",
+    "bg-violet-500/15 text-violet-700 dark:text-violet-400",
+  ],
 };
 
 const NET_CLASS: Record<string, string> = {
@@ -45,9 +54,12 @@ const NET_CLASS: Record<string, string> = {
   CMIN2: "text-emerald-600",
   CMI: "text-teal-600",
   CT: "text-default-500",
+  CTGNet: "text-amber-600",
+  "10099": "text-violet-600",
+  "9808": "text-teal-600",
 };
 
-// IPv6 hops in AS4134 may be the 163 backbone or provincial ChinaNet.
+// AS4134 can include both the 163 backbone and provincial ChinaNet.
 const NET_LABEL: Record<string, string> = { CT: "电信" };
 
 /** A return route as a small colored tag; short form for tight spaces. */
@@ -59,7 +71,10 @@ export function RouteTag({
   short?: boolean;
 }) {
   if (!route || route === "未识别") return null;
-  const [tag, cls] = ROUTES[route] ?? [route, ROUTES["电信 163"][1]];
+  const [tag, cls] = ROUTES[route] ?? [
+    route.replace(/电信 |联通 |移动 /g, ""),
+    ROUTES["电信 163"][1],
+  ];
 
   return (
     <span
@@ -87,6 +102,7 @@ function HopRow({ hop }: { hop: NodeRouteHop }) {
       <span className="text-default-400">{hop.ttl}</span>
       <span className={`break-all ${hop.ip ? "" : "text-default-300"}`}>
         {hop.ip || "*"}
+        {hop.asn && <span className="ml-2 text-default-400">AS{hop.asn}</span>}
         {hop.net && (
           <span className={`ml-2 font-sans ${NET_CLASS[hop.net] ?? ""}`}>
             {NET_LABEL[hop.net] ?? hop.net}
@@ -211,7 +227,9 @@ export function RouteModal({
                             {leg.error}
                           </span>
                         ) : leg.route && leg.route !== "未识别" ? (
-                          <RouteTag route={leg.route} />
+                          <span className="min-w-0 overflow-x-auto">
+                            <RouteTag route={leg.route} />
+                          </span>
                         ) : (
                           <span className="text-xs text-default-400">
                             未识别线路
@@ -224,14 +242,22 @@ export function RouteModal({
                           </span>
                         )}
                       </button>
-                      {open === key && leg.hops && (
+                      {open === key && !leg.error && (
                         <div className="border-t border-divider px-3 py-2">
-                          {leg.hops.map((h) => (
+                          {(leg.protocol || leg.detail) && (
+                            <p className="pb-2 text-xs text-default-500">
+                              {leg.protocol
+                                ? `${leg.protocol.toUpperCase()} 探测 · `
+                                : ""}
+                              {leg.detail}
+                            </p>
+                          )}
+                          {(leg.hops ?? []).map((h) => (
                             <HopRow key={h.ttl} hop={h} />
                           ))}
                           {!leg.reached && (
                             <p className="pt-1 text-xs text-default-400">
-                              目标没有回应，只显示到最后一个有回应的路由器
+                              未确认到达目标，只显示到最后一个有回应的路由器
                             </p>
                           )}
                         </div>
@@ -243,11 +269,11 @@ export function RouteModal({
             })
           )}
           <p className="text-xs text-default-400">
-            按经过的骨干网识别：59.43 段为 CN2（不经过 202.97 即 GIA），202.97
-            为 163，219.158 为联通 4837，218.105 / 210.51 为联通
-            9929，223.118–223.121 为移动 CMI，其中归属 AS58807 的为 CMIN2；IPv6
-            回程按每一跳的归属网络（AS4809 为 CN2，AS4134 为电信
-            163）识别。每天自动检测一次。
+            新版 agent 优先使用 TCP 探测，不完整时补充 ICMP。IPv4 / IPv6 均结合
+            ASN 和已知骨干网段识别；跨运营商路径按经过顺序显示。隐藏跳点可能影响
+            CN2 GIA / GT
+            等判断，结果仅反映本次路径特征。每天自动检测，失败或未识别时 6
+            小时后重试。
           </p>
         </ModalBody>
         <ModalFooter>

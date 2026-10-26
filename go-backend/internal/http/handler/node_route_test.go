@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -32,6 +33,7 @@ func TestClassifyRoute(t *testing.T) {
 }
 
 func TestTraceNodeRoutes(t *testing.T) {
+	stubRouteASNs(t, nil)
 	h, r := setupLatencyHandler(t, `[
 		{"name":"电信","host":"ct.example.com","port":80,"enabled":true},
 		{"name":"联通","host":"cu.example.com","port":80,"enabled":true}]`)
@@ -40,10 +42,10 @@ func TestTraceNodeRoutes(t *testing.T) {
 
 	old := nodeTraceroute
 	t.Cleanup(func() { nodeTraceroute = old })
-	calls := 0
-	nodeTraceroute = func(_ *Handler, _ int64, host string, _ int) (map[string]interface{}, error) {
-		calls++
-		if host == "cu.example.com" {
+	var calls atomic.Int64
+	nodeTraceroute = func(_ *Handler, _ int64, target latencyTarget, _ int) (map[string]interface{}, error) {
+		calls.Add(1)
+		if target.Host == "cu.example.com" {
 			return nil, errors.New("未知命令类型: Traceroute")
 		}
 		return map[string]interface{}{
@@ -62,8 +64,8 @@ func TestTraceNodeRoutes(t *testing.T) {
 	}
 	// The traced point is tried again over IPv6; this fake answers over
 	// IPv4 like an old agent, so there is no IPv6 leg.
-	if calls != 3 || len(results) != 1 || results[node].Points[0].IPv6 != nil {
-		t.Fatalf("calls=%d results=%v", calls, results)
+	if calls.Load() != 3 || len(results) != 1 || results[node].Points[0].IPv6 != nil {
+		t.Fatalf("calls=%d results=%v", calls.Load(), results)
 	}
 	got := results[node]
 	if got.Points[0].Route != "电信 CN2 GIA" || len(got.Points[0].Hops) != 3 || got.Points[0].Hops[2].Net != "CN2" {
@@ -74,11 +76,11 @@ func TestTraceNodeRoutes(t *testing.T) {
 	}
 
 	// Fresh traces are not repeated; force traces again.
-	if _, err := h.traceNodeRoutes(context.Background(), nil, false); err != nil || calls != 3 {
-		t.Fatalf("fresh trace repeated: calls=%d err=%v", calls, err)
+	if _, err := h.traceNodeRoutes(context.Background(), nil, false); err != nil || calls.Load() != 3 {
+		t.Fatalf("fresh trace repeated: calls=%d err=%v", calls.Load(), err)
 	}
-	if _, err := h.traceNodeRoutes(context.Background(), []int64{node}, true); err != nil || calls != 6 {
-		t.Fatalf("forced trace: calls=%d err=%v", calls, err)
+	if _, err := h.traceNodeRoutes(context.Background(), []int64{node}, true); err != nil || calls.Load() != 6 {
+		t.Fatalf("forced trace: calls=%d err=%v", calls.Load(), err)
 	}
 
 	// The latency points carry the route name.
@@ -112,6 +114,7 @@ func TestRouteFresh(t *testing.T) {
 }
 
 func TestRefineHopNetSplitsCMIN2(t *testing.T) {
+	stubRouteASNs(t, nil)
 	old := hopASNLookup
 	t.Cleanup(func() { hopASNLookup = old })
 	var asked []string
@@ -137,10 +140,10 @@ func TestRefineHopNetSplitsCMIN2(t *testing.T) {
 	if got := refineHopNet("223.119.7.7", "CMI"); got != "CMI" {
 		t.Fatalf("failed lookup must stay CMI, got %q", got)
 	}
-	if got := refineHopNet("59.43.1.1", "CN2"); got != "CN2" || len(asked) != 3 {
-		t.Fatalf("non-CMI hops are not looked up: %q, asked %v", got, asked)
+	if got := refineHopNet("59.43.1.1", "CN2"); got != "CN2" || len(asked) != 4 {
+		t.Fatalf("all public hops must be looked up: %q, asked %v", got, asked)
 	}
-	// Answers are cached; failures are asked again.
+	// Both answers and recent failures are cached to avoid repeated timeouts.
 	refineHopNet("223.120.22.9", "CMI")
 	refineHopNet("223.119.7.7", "CMI")
 	if len(asked) != 4 {
@@ -152,6 +155,7 @@ func TestRefineHopNetSplitsCMIN2(t *testing.T) {
 }
 
 func TestTraceNodeRoutesAgainAfterAgentUpgrade(t *testing.T) {
+	stubRouteASNs(t, nil)
 	h, r := setupLatencyHandler(t, `[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`)
 	node := mustCreateLatencyNode(t, r, "online", 1, 0)
 	if err := r.UpdateNodeOnline(node, 1, "3.3.15", 0, 0, 0); err != nil {
@@ -160,7 +164,7 @@ func TestTraceNodeRoutesAgainAfterAgentUpgrade(t *testing.T) {
 	old := nodeTraceroute
 	t.Cleanup(func() { nodeTraceroute = old })
 	upgraded := false
-	nodeTraceroute = func(*Handler, int64, string, int) (map[string]interface{}, error) {
+	nodeTraceroute = func(*Handler, int64, latencyTarget, int) (map[string]interface{}, error) {
 		if !upgraded {
 			return nil, errors.New("未知命令类型: Traceroute")
 		}
@@ -189,6 +193,7 @@ func TestTraceNodeRoutesAgainAfterAgentUpgrade(t *testing.T) {
 }
 
 func TestIPv6RouteByOriginAS(t *testing.T) {
+	stubRouteASNs(t, nil)
 	if got := asnQueryName("2001:db8::1"); got != "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.origin6.asn.cymru.com" {
 		t.Fatalf("IPv6 query name = %q", got)
 	}
@@ -249,6 +254,7 @@ func TestIPv6RouteByOriginAS(t *testing.T) {
 }
 
 func TestTraceNodeRoutesDualStack(t *testing.T) {
+	stubRouteASNs(t, nil)
 	h, r := setupLatencyHandler(t, `[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`)
 	node := mustCreateLatencyNode(t, r, "dual", 1, 0)
 	old, oldLookup := nodeTraceroute, hopASNLookup
@@ -259,7 +265,7 @@ func TestTraceNodeRoutesDualStack(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	nodeTraceroute = func(_ *Handler, _ int64, _ string, family int) (map[string]interface{}, error) {
+	nodeTraceroute = func(_ *Handler, _ int64, _ latencyTarget, family int) (map[string]interface{}, error) {
 		if family == 6 {
 			return map[string]interface{}{"ip": "240e:e9::1", "reached": true,
 				"hops": []interface{}{map[string]interface{}{"ttl": 1.0, "ip": "240e:1::1"}}}, nil

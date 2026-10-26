@@ -16,6 +16,7 @@ func timeExceeded(t *testing.T, id, seq int, dst net.IP) []byte {
 	t.Helper()
 	quoted := make([]byte, 28)
 	quoted[0] = 0x45 // IPv4, 20-byte header
+	quoted[9] = 1    // ICMP
 	copy(quoted[16:20], dst.To4())
 	quoted[20] = byte(ipv4.ICMPTypeEcho)
 	binary.BigEndian.PutUint16(quoted[24:26], uint16(id))

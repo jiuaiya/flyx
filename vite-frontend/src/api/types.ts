@@ -795,14 +795,17 @@ export interface NodeRouteHop {
   ttl: number;
   ip?: string;
   rttMs?: number;
-  /** Backbone the hop belongs to: CN2, 163, 4837, 9929, CMI (CT = IPv6 ChinaNet). */
+  /** Backbone identified from ASN or a known network prefix. */
   net?: string;
+  asn?: string;
 }
 
 export interface NodeRoutePoint {
   name: string;
   route?: string;
   reached: boolean;
+  protocol?: "tcp" | "icmp";
+  detail?: string;
   /** "IPv6" when traced over IPv6. */
   family?: string;
   hops?: NodeRouteHop[];

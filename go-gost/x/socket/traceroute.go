@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -24,14 +25,18 @@ const (
 	tracerouteICMPProtoV6 = 58
 )
 
-// TracerouteRequest asks the node for the route to a host (ICMP; IPv4, or
-// IPv6 when the node has no IPv4 route or the host no IPv4 address).
+// TracerouteRequest asks the node for the route to a host over TCP or ICMP;
+// IPv6 is selected when the node or target has no usable IPv4 address.
 type TracerouteRequest struct {
 	Host    string `json:"host"`
 	MaxHops int    `json:"maxHops"`
 	// Family 4 or 6 traces only over that IP version (dual-stack nodes
 	// report both routes); 0 picks as above.
 	Family int `json:"family,omitempty"`
+	// Empty keeps the legacy ICMP command; auto tries TCP and supplements
+	// incomplete traces with a separate ICMP trace.
+	Protocol string `json:"protocol,omitempty"`
+	Port     int    `json:"port,omitempty"`
 }
 
 // TracerouteHop is one TTL; IP is empty when no router answered.
@@ -42,10 +47,12 @@ type TracerouteHop struct {
 }
 
 type TracerouteResponse struct {
-	Host    string          `json:"host"`
-	IP      string          `json:"ip"`
-	Reached bool            `json:"reached"`
-	Hops    []TracerouteHop `json:"hops"`
+	Host     string              `json:"host"`
+	IP       string              `json:"ip"`
+	Reached  bool                `json:"reached"`
+	Hops     []TracerouteHop     `json:"hops"`
+	Protocol string              `json:"protocol,omitempty"`
+	Fallback *TracerouteResponse `json:"fallback,omitempty"`
 }
 
 var traceSem = make(chan struct{}, maxConcurrentTraces)
@@ -76,7 +83,20 @@ func (w *WebSocketReporter) handleTraceroute(data interface{}) (TracerouteRespon
 	if req.Family != 0 && req.Family != 4 && req.Family != 6 {
 		return TracerouteResponse{}, fmt.Errorf("无效的 IP 版本: %d", req.Family)
 	}
-	return traceroute(host, maxHops, req.Family)
+	if req.Port == 0 {
+		req.Port = 80
+	}
+	if req.Port < 1 || req.Port > 65535 {
+		return TracerouteResponse{}, fmt.Errorf("无效的探测端口")
+	}
+	switch req.Protocol {
+	case "", "icmp":
+		return traceroute(host, maxHops, req.Family)
+	case "tcp", "auto":
+		return tracerouteAuto(host, maxHops, req.Family, req.Port, req.Protocol == "auto")
+	default:
+		return TracerouteResponse{}, fmt.Errorf("无效的探测协议")
+	}
 }
 
 // traceAddr picks the address to trace: IPv4 when the node can route to
@@ -167,16 +187,25 @@ var (
 // routers that drop one) and collects the Time Exceeded answers. It needs a
 // raw socket: root or CAP_NET_RAW.
 func traceroute(host string, maxHops, family int) (TracerouteResponse, error) {
-	resp := TracerouteResponse{Host: host}
-	addrs, err := net.LookupIP(host)
+	dst, err := resolveTraceAddr(host, family)
 	if err != nil {
-		return resp, fmt.Errorf("DNS解析失败: %v", err)
+		return TracerouteResponse{Host: host}, err
 	}
-	dst, err := traceAddr(host, addrs, family)
+	return tracerouteICMP(host, dst, maxHops)
+}
+
+func resolveTraceAddr(host string, family int) (net.IP, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 	if err != nil {
-		return resp, err
+		return nil, fmt.Errorf("DNS解析失败: %v", err)
 	}
-	resp.IP = dst.String()
+	return traceAddr(host, addrs, family)
+}
+
+func tracerouteICMP(host string, dst net.IP, maxHops int) (TracerouteResponse, error) {
+	resp := TracerouteResponse{Host: host, IP: dst.String(), Protocol: "icmp"}
 	tp := traceV4
 	if dst.To4() == nil {
 		tp = traceV6
@@ -219,7 +248,7 @@ func traceroute(host string, maxHops, family int) (TracerouteResponse, error) {
 	go func() {
 		defer close(done)
 		buf := make([]byte, 1500)
-		deadline := time.Now().Add(time.Duration(tracerouteRounds) * tracerouteWait)
+		deadline := time.Now().Add(time.Duration(tracerouteRounds)*tracerouteWait + time.Second)
 		_ = conn.SetReadDeadline(deadline)
 		for {
 			n, peer, err := conn.ReadFrom(buf)
@@ -241,11 +270,16 @@ func traceroute(host string, maxHops, family int) (TracerouteResponse, error) {
 					}
 				}
 			}
-			if reached && (reachedAt == 0 || ttl < reachedAt) {
+			if _, sentProbe := sent[seq]; sentProbe && reached && net.ParseIP(peerIP(peer)).Equal(dst) && (reachedAt == 0 || ttl < reachedAt) {
 				reachedAt = ttl
 			}
 			mu.Unlock()
 		}
+	}()
+
+	defer func() {
+		_ = conn.SetReadDeadline(time.Now())
+		<-done
 	}()
 
 	for round := 0; round < tracerouteRounds; round++ {
@@ -321,8 +355,9 @@ func matchTraceReply(tp traceProto, b []byte, id int, dst net.IP) (seq int, reac
 	case *icmp.TimeExceeded:
 		return quotedEcho(tp, body.Data, id, dst)
 	case *icmp.DstUnreach:
-		seq, _, ok := quotedEcho(tp, body.Data, id, dst)
-		return seq, true, ok
+		// A filtering router is not the destination. Keep its reply as a
+		// hop, but do not truncate the trace there.
+		return quotedEcho(tp, body.Data, id, dst)
 	}
 	return 0, false, false
 }
@@ -342,7 +377,7 @@ func quotedEcho(tp traceProto, data []byte, id int, dst net.IP) (int, bool, bool
 			return 0, false, false
 		}
 		ihl := int(data[0]&0x0f) * 4
-		if ihl < 20 || len(data) < ihl+8 || !net.IP(data[16:20]).Equal(dst) {
+		if data[0]>>4 != 4 || data[9] != tracerouteICMPProtoV4 || ihl < 20 || len(data) < ihl+8 || !net.IP(data[16:20]).Equal(dst) {
 			return 0, false, false
 		}
 		echo = data[ihl:]
