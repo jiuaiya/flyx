@@ -175,8 +175,44 @@ func (h *Handler) probeReconnectedNodes(ctx context.Context, nodes []int64) erro
 			return err
 		}
 	}
+	if err := h.probeReconnectedNodeRoutes(ctx, nodes); err != nil {
+		return err
+	}
 	if ctx.Err() == nil {
 		log.Printf("node reconnect probe complete nodes=%v measured_nodes=%v relays=%v inbounds=%v", nodes, nodeIDs, relayIDs, inboundIDs)
+	}
+	return ctx.Err()
+}
+
+// Startup probes can run before the WebSocket is connected. Retry those
+// empty/failed identifications on reconnect instead of caching them for
+// six hours, while keeping a restored valid identification fresh.
+func (h *Handler) probeReconnectedNodeRoutes(ctx context.Context, nodes []int64) error {
+	var retry, refresh []int64
+	for _, id := range nodes {
+		r, exists := h.nodeRoutes.get(id)
+		needsRetry := !exists || len(r.Points) == 0
+		for _, p := range r.Points {
+			if p.Stale || (p.IPv6 != nil && p.IPv6.Stale) ||
+				(!identifiedRoute(p) && (p.IPv6 == nil || !identifiedRoute(*p.IPv6))) {
+				needsRetry = true
+			}
+		}
+		if needsRetry {
+			retry = append(retry, id)
+		} else {
+			refresh = append(refresh, id)
+		}
+	}
+	if len(retry) > 0 {
+		if _, err := h.traceNodeRoutes(ctx, retry, true); err != nil {
+			return err
+		}
+	}
+	if len(refresh) > 0 {
+		if _, err := h.traceNodeRoutes(ctx, refresh, false); err != nil {
+			return err
+		}
 	}
 	return ctx.Err()
 }

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -198,5 +199,65 @@ func TestOldRouteLabelIsMarkedStaleWithoutMutatingStore(t *testing.T) {
 	view := routeLegView(p, now)
 	if !view.Stale || p.Stale || view.Route != p.Route || view.RouteUpdatedAt != p.RouteUpdatedAt {
 		t.Fatalf("invalid aged view: %+v", view)
+	}
+}
+
+func TestReconnectImmediatelyRetriesUnidentifiedRoute(t *testing.T) {
+	stubRouteASNs(t, nil)
+	h, r := setupLatencyHandler(t, `[{"name":"三网","host":"a.example","port":80,"enabled":true}]`)
+	node := mustCreateLatencyNode(t, r, "online", 1, 0)
+	other := mustCreateLatencyNode(t, r, "other", 1, 0)
+	nodes, err := r.ListMonitorNodes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identity string
+	for _, n := range nodes {
+		if n.ID == node {
+			identity = routeNodeIdentity(n)
+		}
+	}
+	h.nodeRoutes.set(node, nodeRoute{CheckedAt: time.Now().UnixMilli(), identity: identity, failed: true, Points: []routePoint{{Name: "三网", host: "a.example", port: 80, Error: "服务器尚未连接，重连后重新检测"}}})
+	h.nodeRoutes.set(other, nodeRoute{CheckedAt: 123})
+	stubLatencyPing(t, func(int64, string) (map[string]interface{}, error) { return okPing(12), nil })
+	old := nodeTraceroute
+	t.Cleanup(func() { nodeTraceroute = old })
+	var calls atomic.Int64
+	nodeTraceroute = func(_ *Handler, id int64, _ latencyTarget, family int) (map[string]interface{}, error) {
+		calls.Add(1)
+		if id != node {
+			t.Errorf("unrelated node traced: %d", id)
+		}
+		if family == 6 {
+			return nil, errors.New("目标没有 IPv6 地址")
+		}
+		return map[string]interface{}{"ip": "1.1.1.1", "hops": []interface{}{map[string]interface{}{"ttl": 1, "ip": "202.97.1.1"}}}, nil
+	}
+	if err := h.probeReconnectedNodes(context.Background(), []int64{node}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := h.nodeRoutes.get(node); calls.Load() != 2 || got.Points[0].Route != "电信 163" || got.Points[0].Stale {
+		t.Fatalf("failed route was not retried: %+v, calls=%d", got, calls.Load())
+	}
+	if got, _ := h.nodeRoutes.get(other); got.CheckedAt != 123 {
+		t.Fatal("unrelated node was traced")
+	}
+	if err := h.probeReconnectedNodeRoutes(context.Background(), []int64{node}); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 {
+		t.Fatal("a restored/fresh valid route was unnecessarily traced again")
+	}
+	if err := r.UpsertConfig(latencyTargetsConfigKey, `[{"name":"三网","host":"a.example","port":80,"enabled":true},{"name":"三网2","host":"b.example","port":80,"enabled":true}]`, time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	partial, _ := h.nodeRoutes.get(node)
+	partial.Points = append(partial.Points, routePoint{Name: "三网2", host: "b.example", port: 80, Error: "服务器尚未连接，重连后重新检测"})
+	h.nodeRoutes.set(node, partial)
+	if err := h.probeReconnectedNodeRoutes(context.Background(), []int64{node}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := h.nodeRoutes.get(node); calls.Load() != 6 || len(got.Points) != 2 || got.Points[1].Route != "电信 163" {
+		t.Fatalf("partial startup failure was not retried: %+v, calls=%d", got, calls.Load())
 	}
 }

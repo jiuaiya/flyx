@@ -221,6 +221,8 @@ func routePointFrom(t latencyTarget, data map[string]interface{}, err error) rou
 	if err != nil {
 		msg := err.Error()
 		switch {
+		case strings.Contains(msg, "不在线") || strings.Contains(msg, "离线") || strings.Contains(msg, "未连接"):
+			p.Error = "服务器尚未连接，重连后重新检测"
 		case strings.Contains(msg, "未知命令"):
 			p.Error = "服务器 agent 版本过旧，升级后可检测回程"
 		case strings.Contains(msg, "NET_RAW"):

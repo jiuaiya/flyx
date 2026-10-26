@@ -184,6 +184,7 @@ func (h *Handler) restoreNodeRoutes() {
 		byID[node.ID] = node
 	}
 	pool := h.latencyPool()
+	loaded := 0
 	for _, snapshot := range snapshots {
 		var saved savedNodeRoute
 		if err := json.Unmarshal([]byte(snapshot.Data), &saved); err != nil || saved.Version != 1 ||
@@ -218,6 +219,10 @@ func (h *Handler) restoreNodeRoutes() {
 		}
 		if len(r.Points) > 0 {
 			h.nodeRoutes.set(snapshot.NodeID, r)
+			loaded++
 		}
+	}
+	if loaded > 0 {
+		log.Printf("restored node route snapshots count=%d", loaded)
 	}
 }
