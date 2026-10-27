@@ -40,10 +40,10 @@ type IngestionService struct {
 	nodeBufferMu  sync.Mutex
 	flushInterval time.Duration
 
-	// lastBytes is each node's last byte counters (in, out); traffic adds
-	// what they grew by, per hour, until the next flush.
-	lastBytes map[int64][2]int64
-	traffic   map[trafficKey][2]int64
+	// Keep uptime and receipt time with the counters so delayed reports and
+	// disappearing virtual interfaces cannot look like a machine reboot.
+	lastMetric map[int64]*model.NodeMetric
+	traffic    map[trafficKey][2]int64
 }
 
 func NewIngestionService(repo *repo.Repository) *IngestionService {
@@ -51,18 +51,45 @@ func NewIngestionService(repo *repo.Repository) *IngestionService {
 		repo:          repo,
 		nodeBuffer:    make([]*model.NodeMetric, 0, 500),
 		flushInterval: 30 * time.Second,
-		lastBytes:     map[int64][2]int64{},
+		lastMetric:    map[int64]*model.NodeMetric{},
 		traffic:       map[trafficKey][2]int64{},
 	}
 }
 
-// counterDelta is what a byte counter grew by; a smaller value means the
-// counter restarted (a reboot), so all of it is new.
+// A counter can fall when an interface disappears or the agent changes which
+// interfaces it reports. Only a confirmed reboot may count the new value in full.
 func counterDelta(prev, cur int64) int64 {
 	if cur >= prev {
 		return cur - prev
 	}
-	return cur
+	return 0
+}
+
+// NodeTrafficDelta also serves offline repairs of retained raw metrics. A lower
+// uptime is a reboot only if the new uptime fits in the time since the previous
+// report (plus five seconds of sampling/clock tolerance). Otherwise it is stale.
+func NodeTrafficDelta(prev, cur *model.NodeMetric) (in, out int64, accepted bool) {
+	if cur.NetInBytes < 0 || cur.NetOutBytes < 0 {
+		return 0, 0, false
+	}
+	if prev == nil {
+		return 0, 0, true
+	}
+	if prev.Uptime > 0 && cur.Uptime == 0 {
+		return 0, 0, false
+	}
+	if prev.Uptime > 0 && cur.Uptime > 0 && cur.Uptime < prev.Uptime {
+		elapsed := (cur.Timestamp - prev.Timestamp) / 1000
+		if elapsed < 0 || cur.Uptime > elapsed+5 {
+			return 0, 0, false
+		}
+		return cur.NetInBytes, cur.NetOutBytes, true
+	}
+	if cur.Uptime > 0 && cur.Uptime == prev.Uptime &&
+		(cur.NetInBytes < prev.NetInBytes || cur.NetOutBytes < prev.NetOutBytes) {
+		return 0, 0, false
+	}
+	return counterDelta(prev.NetInBytes, cur.NetInBytes), counterDelta(prev.NetOutBytes, cur.NetOutBytes), true
 }
 
 func (s *IngestionService) Start(ctx context.Context) {
@@ -105,17 +132,22 @@ func (s *IngestionService) RecordNodeMetric(nodeID int64, info SystemInfo) {
 	}
 
 	s.nodeBufferMu.Lock()
+	in, out, accepted := NodeTrafficDelta(s.lastMetric[nodeID], m)
+	if !accepted {
+		s.nodeBufferMu.Unlock()
+		return
+	}
 	s.nodeBuffer = append(s.nodeBuffer, m)
 	shouldFlush := len(s.nodeBuffer) >= 200
 	// The first report after a panel restart only sets the baseline.
-	if prev, ok := s.lastBytes[nodeID]; ok {
+	if s.lastMetric[nodeID] != nil {
 		k := trafficKey{nodeID, m.Timestamp - m.Timestamp%int64(time.Hour/time.Millisecond)}
 		t := s.traffic[k]
-		t[0] += counterDelta(prev[0], m.NetInBytes)
-		t[1] += counterDelta(prev[1], m.NetOutBytes)
+		t[0] += in
+		t[1] += out
 		s.traffic[k] = t
 	}
-	s.lastBytes[nodeID] = [2]int64{m.NetInBytes, m.NetOutBytes}
+	s.lastMetric[nodeID] = m
 	s.nodeBufferMu.Unlock()
 
 	if shouldFlush {

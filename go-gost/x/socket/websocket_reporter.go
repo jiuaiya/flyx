@@ -1715,13 +1715,7 @@ func getNetworkStats() NetworkStats {
 		return stats
 	}
 
-	for _, io := range ioCounters {
-		if io.Name == "lo" || strings.HasPrefix(io.Name, "lo") {
-			continue
-		}
-		stats.BytesReceived += io.BytesRecv
-		stats.BytesTransmitted += io.BytesSent
-	}
+	stats = reportedNetworkTotals(ioCounters)
 
 	if lastNetBytesReceived > 0 && stats.BytesReceived >= lastNetBytesReceived {
 		stats.BytesRecvDelta = stats.BytesReceived - lastNetBytesReceived
@@ -1730,6 +1724,26 @@ func getNetworkStats() NetworkStats {
 		stats.BytesSentDelta = stats.BytesTransmitted - lastNetBytesTransmitted
 	}
 
+	return stats
+}
+
+// Container bridges and veth peers carry copies of the same external packets.
+// Keep ordinary NIC names (including eth0 inside an agent container).
+func reportedNetworkTotals(counters []psnet.IOCountersStat) NetworkStats {
+	var stats NetworkStats
+	for _, counter := range counters {
+		virtual := false
+		for _, prefix := range []string{"lo", "docker", "veth", "br-", "cni", "flannel", "cali", "kube"} {
+			if strings.HasPrefix(counter.Name, prefix) {
+				virtual = true
+				break
+			}
+		}
+		if !virtual {
+			stats.BytesReceived += counter.BytesRecv
+			stats.BytesTransmitted += counter.BytesSent
+		}
+	}
 	return stats
 }
 

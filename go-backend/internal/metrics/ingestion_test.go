@@ -344,8 +344,7 @@ func TestZeroValues(t *testing.T) {
 	}
 }
 
-// Traffic is what the byte counters grew by; the first report is only a
-// baseline and a smaller counter (a reboot) counts in full.
+// Counter regression without evidence of a reboot only establishes a new baseline.
 func TestNodeTrafficFromCounters(t *testing.T) {
 	s := NewIngestionService(nil)
 	s.RecordNodeMetric(7, SystemInfo{BytesReceived: 1000, BytesTransmitted: 500})
@@ -358,7 +357,7 @@ func TestNodeTrafficFromCounters(t *testing.T) {
 			out += v[1]
 		}
 	}
-	if in != 700 || out != 450 {
+	if in != 600 || out != 400 {
 		t.Fatalf("traffic in=%d out=%d", in, out)
 	}
 }

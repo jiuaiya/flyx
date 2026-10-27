@@ -389,7 +389,7 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 						onMetric := s.onNodeMetric
 						s.mu.RUnlock()
 						if onMetric != nil {
-							go onMetric(nodeID, sysInfo)
+							onMetric(nodeID, sysInfo)
 						}
 					}
 					// 广播内层 data 给前端（保持平坦结构兼容性）
@@ -415,7 +415,7 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 				onMetric := s.onNodeMetric
 				s.mu.RUnlock()
 				if onMetric != nil {
-					go onMetric(nodeID, sysInfo)
+					onMetric(nodeID, sysInfo)
 				}
 				s.broadcastTyped(nodeID, "metric", msg)
 				continue
