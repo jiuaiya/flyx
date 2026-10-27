@@ -272,8 +272,8 @@ func (r *Repository) NodePortRangeOccupant(nodeID int64, lo, hi int, excludeInbo
 }
 
 // ApplyInboundCounterSamples converts cumulative counters into traffic deltas.
-// A sample whose epoch differs from the stored one, or whose value went
-// backwards, belongs to a fresh counter and counts from zero.
+// Only an epoch change identifies a fresh counter. A smaller value in the
+// same epoch is stale and must not move the baseline backwards.
 func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, now int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
@@ -287,7 +287,7 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 			ids = append(ids, s.InboundID)
 		}
 		var existing []int64
-		if err := tx.Model(&model.NodeInbound{}).Where("id IN ?", ids).Pluck("id", &existing).Error; err != nil {
+		if err := tx.Model(&model.NodeInbound{}).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ?", ids).Order("id").Pluck("id", &existing).Error; err != nil {
 			return err
 		}
 		known := make(map[int64]struct{}, len(existing))
@@ -319,8 +319,13 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 				continue
 			}
 			delta := s.Bytes
-			if old, ok := prev[key{s.InboundID, s.Protocol, s.Direction}]; ok && old.Epoch == s.Epoch && s.Bytes >= old.Bytes {
-				delta = s.Bytes - old.Bytes
+			if old, ok := prev[key{s.InboundID, s.Protocol, s.Direction}]; ok {
+				if now < old.UpdatedTime || old.Epoch == s.Epoch && s.Bytes <= old.Bytes {
+					continue
+				}
+				if old.Epoch == s.Epoch {
+					delta = s.Bytes - old.Bytes
+				}
 			}
 			if delta > 0 {
 				if s.Direction == "in" {
@@ -343,6 +348,7 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 			}).Create(&row).Error; err != nil {
 				return err
 			}
+			prev[key{s.InboundID, s.Protocol, s.Direction}] = row
 		}
 		for id := range known {
 			up, down := upload[id], download[id]

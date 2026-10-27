@@ -307,7 +307,7 @@ type SubscriptionCounterSample struct {
 }
 
 // ApplySubscriptionCounterSamples adds what each counter grew by since the
-// last sample of the same epoch (the whole value after a counter reset) to
+// last sample of the same epoch (the whole value after an epoch change) to
 // the subscriptions' traffic.
 func (r *Repository) ApplySubscriptionCounterSamples(nodeID int64, epoch string, samples []SubscriptionCounterSample, now int64) error {
 	if r == nil || r.db == nil {
@@ -317,6 +317,20 @@ func (r *Repository) ApplySubscriptionCounterSamples(nodeID int64, epoch string,
 		return nil
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		subIDs := make([]int64, 0, len(samples))
+		for _, s := range samples {
+			subIDs = append(subIDs, s.SubscriptionID)
+		}
+		var subscriptions []model.Subscription
+		// Lock parent rows before reading counters; this also serializes first
+		// samples whose counter rows do not exist yet on PostgreSQL.
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ?", subIDs).Order("id").Find(&subscriptions).Error; err != nil {
+			return err
+		}
+		known := make(map[int64]bool, len(subscriptions))
+		for _, s := range subscriptions {
+			known[s.ID] = true
+		}
 		var states []model.SubscriptionCounter
 		if err := tx.Where("node_id = ?", nodeID).Find(&states).Error; err != nil {
 			return err
@@ -332,13 +346,18 @@ func (r *Repository) ApplySubscriptionCounterSamples(nodeID int64, epoch string,
 		up := map[int64]int64{}
 		down := map[int64]int64{}
 		for _, s := range samples {
-			if s.Bytes < 0 || (s.Direction != "up" && s.Direction != "down") {
+			if !known[s.SubscriptionID] || s.Bytes < 0 || (s.Direction != "up" && s.Direction != "down") {
 				continue
 			}
 			delta := s.Bytes
 			old, seen := prev[key{s.SubscriptionID, s.Direction}]
-			if seen && old.Epoch == epoch && s.Bytes >= old.Bytes {
-				delta = s.Bytes - old.Bytes
+			if seen {
+				if now < old.UpdatedTime || old.Epoch == epoch && s.Bytes <= old.Bytes {
+					continue
+				}
+				if old.Epoch == epoch {
+					delta = s.Bytes - old.Bytes
+				}
 			}
 			if delta > 0 {
 				if s.Direction == "up" {
@@ -355,6 +374,7 @@ func (r *Repository) ApplySubscriptionCounterSamples(nodeID int64, epoch string,
 			}).Create(&row).Error; err != nil {
 				return err
 			}
+			prev[key{s.SubscriptionID, s.Direction}] = row
 		}
 		ids := map[int64]bool{}
 		for id := range up {

@@ -210,6 +210,7 @@ func TestKernelInboundLifecycleContract(t *testing.T) {
 			t.Helper()
 			if err := r.ApplyInboundCounterSamples([]repo.InboundCounterSample{
 				{InboundID: inboundID, Protocol: "tcp", Direction: "in", Epoch: epoch, Bytes: in},
+				{InboundID: inboundID, Protocol: "tcp", Direction: "in", Epoch: epoch, Bytes: in}, // duplicate is idempotent
 				{InboundID: inboundID, Protocol: "tcp", Direction: "out", Epoch: epoch, Bytes: out},
 				{InboundID: 424242, Protocol: "tcp", Direction: "in", Epoch: epoch, Bytes: 5},
 			}, now); err != nil {
@@ -219,10 +220,10 @@ func TestKernelInboundLifecycleContract(t *testing.T) {
 		apply("e1", 100, 1000)
 		apply("e1", 150, 1600) // +50 / +600
 		apply("e2", 30, 40)    // new epoch counts from zero
-		apply("e2", 10, 50)    // counter went backwards: treat as reset
+		apply("e2", 10, 50)    // stale upload is ignored; download still grows
 		up := mustQueryInt64(t, r, `SELECT upload_bytes FROM node_inbound WHERE id = ?`, inboundID)
 		down := mustQueryInt64(t, r, `SELECT download_bytes FROM node_inbound WHERE id = ?`, inboundID)
-		if up != 100+50+30+10 || down != 1000+600+40+10 {
+		if up != 100+50+30 || down != 1000+600+40+10 {
 			t.Fatalf("traffic up=%d down=%d", up, down)
 		}
 		if out := kernelContractPost(t, router, admin, "/api/v1/inbound/reset-traffic", `{"id":`+jsonInt64(inboundID)+`}`); out.Code != 0 {

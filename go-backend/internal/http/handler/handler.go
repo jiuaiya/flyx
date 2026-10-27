@@ -37,6 +37,9 @@ type Handler struct {
 	metrics         *metrics.IngestionService
 	healthCheck     *health.Checker
 	nftablesManager nftablesRuntimeManager
+	// Serialize a node's status requests so old counter epochs cannot arrive
+	// after newer ones through overlapping UI, reconnect and periodic polls.
+	kernelStatusPolls sync.Map
 
 	peerResourceMu sync.Mutex
 	captchaMu      sync.Mutex

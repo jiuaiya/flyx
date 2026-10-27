@@ -1621,6 +1621,11 @@ func (h *Handler) refreshNodeKernelStatus(nodeID int64) {
 }
 
 func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
+	lock, _ := h.kernelStatusPolls.LoadOrStore(nodeID, new(sync.Mutex))
+	mu := lock.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
 	kernels, err := h.repo.ListNodeKernels(nodeID)
 	if err != nil || (len(kernels) == 0 && !evenIfNone) {
 		return
