@@ -55,7 +55,7 @@ func retainRouteIdentifications(prev, next nodeRoute) nodeRoute {
 		byTarget[routeTargetKey{p.host, p.port}] = p
 	}
 	retain := func(old, current routePoint) routePoint {
-		uncertainChange := current.asnIncomplete && identifiedRoute(old) && current.Route != old.Route
+		uncertainChange := current.asnIncomplete && identifiedRoute(old) && current.Route != old.Route && !sameCN2BackboneRoute(old.Route, current.Route)
 		if current.Error == "" && identifiedRoute(current) && !uncertainChange {
 			current.RouteUpdatedAt, current.Stale = next.CheckedAt, false
 		} else if identifiedRoute(old) {
@@ -198,6 +198,7 @@ func (h *Handler) restoreNodeRoutes() {
 		}
 		r := saved.Result
 		r.agent, r.identity, r.failed = saved.Agent, saved.Identity, saved.Failed
+		reclassified := false
 		byTarget := make(map[routeTargetKey]routePoint)
 		for i, p := range r.Points {
 			t := saved.Targets[i]
@@ -205,6 +206,9 @@ func (h *Handler) restoreNodeRoutes() {
 			if p.IPv6 != nil {
 				p.IPv6.host, p.IPv6.port, p.IPv6.asnIncomplete = t.Host, t.Port, t.IPv6ASNIncomplete
 			}
+			var changed bool
+			p, changed = refreshCachedCN2(p)
+			reclassified = reclassified || changed
 			byTarget[routeTargetKey{t.Host, t.Port}] = p
 		}
 		r.Points = nil
@@ -218,7 +222,15 @@ func (h *Handler) restoreNodeRoutes() {
 			}
 		}
 		if len(r.Points) > 0 {
+			for _, p := range r.Points {
+				r.failed = r.failed || routeNeedsRetry(p)
+			}
 			h.nodeRoutes.set(snapshot.NodeID, r)
+			if reclassified {
+				if err := h.persistNodeRoute(snapshot.NodeID, r); err != nil {
+					log.Printf("save reclassified CN2 snapshot node=%d: %v", snapshot.NodeID, err)
+				}
+			}
 			loaded++
 		}
 	}

@@ -131,7 +131,7 @@ func TestClassifyRouteExtendedNetworksAndHandoffs(t *testing.T) {
 		for i, n := range tt.nets {
 			hops[i] = routeHop{TTL: i + 1, Net: n}
 		}
-		if got := classifyRoute(hops); got != tt.want {
+		if got := classifyRoute(hops, true); got != tt.want {
 			t.Errorf("%v: got %q, want %q", tt.nets, got, tt.want)
 		}
 	}
@@ -149,7 +149,7 @@ func TestRoutePointProtocolSelectionAndDiagnostics(t *testing.T) {
 	primary := trace("tcp", "10.0.0.1", "8.8.8.8")
 	primary["fallback"] = trace("icmp", "", "59.43.1.1")
 	p := routePointFrom(latencyTarget{Name: "电信"}, primary, nil)
-	if p.Protocol != "icmp" || p.Route != "电信 CN2 GIA" || len(p.Hops) != 2 || p.Hops[0].IP != "" {
+	if p.Protocol != "icmp" || p.Route != routeCN2Uncertain || len(p.Hops) != 2 || p.Hops[0].IP != "" {
 		t.Fatalf("fallback selection merged paths or lost classification: %+v", p)
 	}
 	primary = trace("tcp", "223.120.1.1")

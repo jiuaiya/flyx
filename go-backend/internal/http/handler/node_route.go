@@ -28,7 +28,7 @@ const (
 
 // classifyRoute preserves operator hand-offs instead of letting a fixed
 // operator priority hide the actual international transit network.
-func classifyRoute(hops []routeHop) string {
+func classifyRoute(hops []routeHop, reached bool) string {
 	carrier := func(n string) string {
 		switch n {
 		case "CN2", "CT", "163", "CTGNet":
@@ -50,15 +50,11 @@ func classifyRoute(hops []routeHop) string {
 		operator := carrier(hops[start].Net)
 		seen := make(map[string]bool)
 		first := make(map[string]int)
-		ctBeforeCN2 := false
 		end := start
 		for end < len(hops) && (hops[end].Net == "" || carrier(hops[end].Net) == operator) {
 			n := hops[end].Net
 			if !seen[n] {
 				first[n] = end
-			}
-			if n == "CT" && !seen["CN2"] {
-				ctBeforeCN2 = true
 			}
 			seen[n] = true
 			end++
@@ -66,16 +62,7 @@ func classifyRoute(hops []routeHop) string {
 		var label string
 		switch operator {
 		case "电信":
-			switch {
-			case seen["CTGNet"]:
-				label = "电信 CTGNet"
-			case seen["CN2"] && !seen["163"] && !ctBeforeCN2:
-				label = "电信 CN2 GIA"
-			case seen["CN2"]:
-				label = "电信 CN2 GT"
-			default:
-				label = "电信 163"
-			}
+			label = classifyTelecomRoute(hops[start:end], reached)
 		case "联通":
 			switch {
 			case seen["9929"]:
@@ -265,7 +252,7 @@ func routePointFrom(t latencyTarget, data map[string]interface{}, err error) rou
 	}
 	sort.SliceStable(p.Hops, func(i, j int) bool { return p.Hops[i].TTL < p.Hops[j].TTL })
 	p.Protocol = asString(data["protocol"])
-	p.Route = classifyRoute(p.Hops)
+	p.Route = classifyRoute(p.Hops, p.Reached)
 	p.Detail = routeDetail(p)
 	// Keep a complete trace from one protocol. Mixing TTLs from different
 	// protocols can fabricate a path that no packet actually followed.
@@ -284,6 +271,25 @@ func routePointFrom(t latencyTarget, data map[string]interface{}, err error) rou
 // routeDetail explains a result without inferring a premium line from
 // the destination operator or from routers that did not answer.
 func routeDetail(p routePoint) string {
+	if strings.Contains(p.Route, "电信 CN2") {
+		var detail string
+		switch {
+		case strings.Contains(p.Route, routeCN2Uncertain):
+			if !p.Reached {
+				detail = "已发现 CN2 跳点，但探测未到达目标，GIA / GT 未确定"
+			} else {
+				detail = "已发现 CN2，但独立路由接口回应不足，GIA / GT 未确定"
+			}
+		case strings.Contains(p.Route, "电信 CN2 GT"):
+			detail = "同时发现 CN2 和 202.97 骨干回应，推断为 GT 路径特征；产品等级请以上游交付为准"
+		default:
+			detail = "已到达目标并发现多个独立 CN2 接口，未见 202.97 骨干回应，推断为 GIA 路径特征；隐藏跳点可能影响判断，产品等级请以上游交付为准"
+		}
+		if p.asnIncomplete {
+			detail = "部分 ASN 查询暂无结果，已结合已知骨干网段识别；" + detail
+		}
+		return detail
+	}
 	if p.Route != "未识别" {
 		if p.asnIncomplete {
 			return "部分 ASN 查询暂无结果，已结合已知骨干网段识别；隐藏跳点可能影响 CN2 GIA / GT 等判断"
@@ -314,9 +320,12 @@ func betterRoutePoint(candidate, current routePoint) bool {
 	if known(candidate) != known(current) {
 		return known(candidate)
 	}
-	// Prefer TCP when both protocols identify a line, even if ICMP has
-	// more responding access routers.
+	// Prefer TCP when both protocols identify a line. On the same CN2 path,
+	// a trace with enough backbone evidence can replace an uncertain grade.
 	if known(current) {
+		if sameCN2BackboneRoute(candidate.Route, current.Route) && strings.Contains(current.Route, routeCN2Uncertain) && !strings.Contains(candidate.Route, routeCN2Uncertain) {
+			return true
+		}
 		return false
 	}
 	count := func(p routePoint) int {
@@ -486,7 +495,7 @@ func (h *Handler) traceNodeRoutes(ctx context.Context, ids []int64, force bool) 
 }
 
 func routeNeedsRetry(p routePoint) bool {
-	return p.Error != "" || p.Route == "" || p.Route == "未识别" || p.Stale || p.asnIncomplete ||
+	return p.Error != "" || p.Route == "" || p.Route == "未识别" || strings.Contains(p.Route, routeCN2Uncertain) || p.Stale || p.asnIncomplete ||
 		(p.IPv6 != nil && routeNeedsRetry(*p.IPv6))
 }
 

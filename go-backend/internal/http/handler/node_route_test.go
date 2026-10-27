@@ -26,7 +26,7 @@ func TestClassifyRoute(t *testing.T) {
 		"移动 CMI":     {"223.120.2.1", "221.183.55.1"},
 		"未识别":        {"10.0.0.1", "", ""},
 	} {
-		if got := classifyRoute(hopsOf(ips...)); got != want {
+		if got := classifyRoute(hopsOf(ips...), true); got != want {
 			t.Errorf("%v: got %q, want %q", ips, got, want)
 		}
 	}
@@ -54,6 +54,7 @@ func TestTraceNodeRoutes(t *testing.T) {
 				map[string]interface{}{"ttl": 1.0, "ip": "10.0.0.1", "rttMs": 0.4},
 				map[string]interface{}{"ttl": 2.0},
 				map[string]interface{}{"ttl": 3.0, "ip": "59.43.180.1", "rttMs": 150.2},
+				map[string]interface{}{"ttl": 4.0, "ip": "59.43.246.5", "rttMs": 151.0},
 			},
 		}, nil
 	}
@@ -68,7 +69,7 @@ func TestTraceNodeRoutes(t *testing.T) {
 		t.Fatalf("calls=%d results=%v", calls.Load(), results)
 	}
 	got := results[node]
-	if got.Points[0].Route != "电信 CN2 GIA" || len(got.Points[0].Hops) != 3 || got.Points[0].Hops[2].Net != "CN2" {
+	if got.Points[0].Route != "电信 CN2 GIA" || len(got.Points[0].Hops) != 4 || got.Points[0].Hops[2].Net != "CN2" {
 		t.Fatalf("telecom point = %+v", got.Points[0])
 	}
 	if got.Points[1].Error == "" || got.Points[1].Route != "" {
@@ -149,7 +150,7 @@ func TestRefineHopNetSplitsCMIN2(t *testing.T) {
 	if len(asked) != 4 {
 		t.Fatalf("asked %v", asked)
 	}
-	if got := classifyRoute([]routeHop{{IP: "223.120.22.9", Net: "CMIN2"}, {IP: "223.120.6.5", Net: "CMI"}}); got != "移动 CMIN2" {
+	if got := classifyRoute([]routeHop{{IP: "223.120.22.9", Net: "CMIN2"}, {IP: "223.120.6.5", Net: "CMI"}}, true); got != "移动 CMIN2" {
 		t.Fatalf("route with a CMIN2 hop = %q", got)
 	}
 }
@@ -228,15 +229,15 @@ func TestIPv6RouteByOriginAS(t *testing.T) {
 	}
 	for want, ips := range map[string][]string{
 		// CN2 first, provincial ChinaNet at the end: still GIA.
-		"电信 CN2 GIA": {"fe80::1", "2400:4809::1", "2400:4809::2", "240e:1::1"},
-		"电信 CN2 GT":  {"240e:1::1", "2400:4809::1", "240e:1::2"},
-		"电信 163":     {"2001:db8::7", "240e:1::1", "240e:1::2"},
-		"联通 9929":    {"2408:9929::1", "2408:1::1"},
-		"联通 4837":    {"2408:1::1"},
-		"移动 CMIN2":   {"2402:5880::1"},
-		"未识别":        {"fe80::1", "2001:db8::9"},
+		"电信 CN2 GIA":      {"fe80::1", "2400:4809::1", "2400:4809::2", "240e:1::1"},
+		routeCN2Uncertain: {"240e:1::1", "2400:4809::1", "240e:1::2"},
+		"电信 163":          {"2001:db8::7", "240e:1::1", "240e:1::2"},
+		"联通 9929":         {"2408:9929::1", "2408:1::1"},
+		"联通 4837":         {"2408:1::1"},
+		"移动 CMIN2":        {"2402:5880::1"},
+		"未识别":             {"fe80::1", "2001:db8::9"},
 	} {
-		if got := classifyRoute(hops(ips...)); got != want {
+		if got := classifyRoute(hops(ips...), true); got != want {
 			t.Errorf("%v: got %q, want %q", ips, got, want)
 		}
 	}
@@ -245,7 +246,7 @@ func TestIPv6RouteByOriginAS(t *testing.T) {
 		"ip": "240e:1::99", "reached": true,
 		"hops": []interface{}{map[string]interface{}{"ttl": 1, "ip": "2400:4809::1"}},
 	}, nil)
-	if p.Family != "IPv6" || p.Route != "电信 CN2 GIA" {
+	if p.Family != "IPv6" || p.Route != routeCN2Uncertain {
 		t.Fatalf("IPv6 point = %+v", p)
 	}
 	if e := routePointFrom(latencyTarget{Name: "电信"}, nil, errors.New("节点没有 IPv4 路由，目标没有 IPv6 地址")).Error; e != "服务器只有 IPv6，测试点没有 IPv6 地址" {
@@ -271,7 +272,7 @@ func TestTraceNodeRoutesDualStack(t *testing.T) {
 				"hops": []interface{}{map[string]interface{}{"ttl": 1.0, "ip": "240e:1::1"}}}, nil
 		}
 		return map[string]interface{}{"ip": "203.0.113.9", "reached": true,
-			"hops": []interface{}{map[string]interface{}{"ttl": 1.0, "ip": "59.43.180.1"}}}, nil
+			"hops": []interface{}{map[string]interface{}{"ttl": 1.0, "ip": "59.43.180.1"}, map[string]interface{}{"ttl": 2.0, "ip": "59.43.246.5"}}}, nil
 	}
 	results, err := h.traceNodeRoutes(context.Background(), nil, true)
 	if err != nil {
