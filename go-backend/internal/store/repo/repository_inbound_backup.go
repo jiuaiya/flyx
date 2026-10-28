@@ -48,7 +48,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 	for _, rel := range relays {
 		out.Relays = append(out.Relays, model.InboundRelayBackup{
 			ID: rel.ID, InboundID: rel.InboundID, ForwardID: rel.ForwardID, Name: rel.Name,
-			ShareHost: rel.ShareHost, Managed: rel.Managed, CreatedTime: rel.CreatedTime,
+			ShareHost: rel.ShareHost, TargetIPFamily: rel.TargetIPFamily, Managed: rel.Managed, CreatedTime: rel.CreatedTime,
 		})
 	}
 
@@ -212,11 +212,11 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64) (int, error
 		}
 		item := model.NodeInboundRelay{
 			ID: rel.ID, InboundID: rel.InboundID, ForwardID: rel.ForwardID, Name: rel.Name,
-			ShareHost: rel.ShareHost, Managed: rel.Managed, CreatedTime: rel.CreatedTime,
+			ShareHost: rel.ShareHost, TargetIPFamily: rel.TargetIPFamily, Managed: rel.Managed, CreatedTime: rel.CreatedTime,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"inbound_id", "forward_id", "name", "share_host", "managed"}),
+			DoUpdates: clause.AssignmentColumns([]string{"inbound_id", "forward_id", "name", "share_host", "target_ip_family", "managed"}),
 		}).Create(&item).Error; err != nil {
 			return 0, err
 		}

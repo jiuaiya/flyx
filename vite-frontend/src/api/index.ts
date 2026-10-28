@@ -1366,6 +1366,8 @@ export const createInboundRelay = (data: {
   inPort?: number;
   name?: string;
   shareHost?: string;
+  inIp?: string;
+  targetIpFamily?: "auto" | "ipv4" | "ipv6";
 }) => Network.post<{ id: number }>("/inbound/relay/create", data);
 /** Renames a relay and changes its share host; the forward is untouched. */
 export const updateInboundRelay = (data: {

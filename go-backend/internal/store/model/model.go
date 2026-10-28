@@ -557,13 +557,14 @@ type RemoteSourceBackup struct {
 }
 
 type InboundRelayBackup struct {
-	ID          int64  `json:"id"`
-	InboundID   int64  `json:"inboundId"`
-	ForwardID   int64  `json:"forwardId"`
-	Name        string `json:"name"`
-	ShareHost   string `json:"shareHost"`
-	Managed     int    `json:"managed"`
-	CreatedTime int64  `json:"createdTime"`
+	ID             int64  `json:"id"`
+	InboundID      int64  `json:"inboundId"`
+	ForwardID      int64  `json:"forwardId"`
+	Name           string `json:"name"`
+	ShareHost      string `json:"shareHost"`
+	TargetIPFamily string `json:"targetIpFamily,omitempty"`
+	Managed        int    `json:"managed"`
+	CreatedTime    int64  `json:"createdTime"`
 }
 
 type InboundCounterBackup struct {

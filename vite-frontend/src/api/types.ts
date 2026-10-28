@@ -993,6 +993,7 @@ export interface InboundRelayApiItem {
   forwardId: number;
   name: string;
   shareHost: string;
+  targetIpFamily?: "auto" | "ipv4" | "ipv6";
   managed: boolean;
   mode: "port" | "tunnel";
   forwardName: string;

@@ -349,7 +349,7 @@ func (h *Handler) retargetRelays(row *model.NodeInbound) []string {
 		if err != nil || tunnel == nil {
 			continue
 		}
-		target, err := h.relayTarget(row, tunnel)
+		target, err := h.relayTargetForFamily(row, tunnel, rel.TargetIPFamily)
 		if err != nil {
 			problems = append(problems, rel.Name+": "+err.Error())
 			continue

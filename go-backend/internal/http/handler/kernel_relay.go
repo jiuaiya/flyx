@@ -18,21 +18,22 @@ import (
 )
 
 type relayView struct {
-	ID            int64               `json:"id"`
-	InboundID     int64               `json:"inboundId"`
-	ForwardID     int64               `json:"forwardId"`
-	Name          string              `json:"name"`
-	ShareHost     string              `json:"shareHost"`
-	Managed       bool                `json:"managed"`
-	Mode          string              `json:"mode"` // "port" or "tunnel"
-	ForwardName   string              `json:"forwardName"`
-	ForwardStatus int                 `json:"forwardStatus"`
-	ForwardExists bool                `json:"forwardExists"`
-	TunnelID      int64               `json:"tunnelId"`
-	TunnelName    string              `json:"tunnelName"`
-	RemoteAddr    string              `json:"remoteAddr"`
-	Entries       []repo.ForwardEntry `json:"entries"`
-	CreatedTime   int64               `json:"createdTime"`
+	ID             int64               `json:"id"`
+	InboundID      int64               `json:"inboundId"`
+	ForwardID      int64               `json:"forwardId"`
+	Name           string              `json:"name"`
+	ShareHost      string              `json:"shareHost"`
+	TargetIPFamily string              `json:"targetIpFamily"`
+	Managed        bool                `json:"managed"`
+	Mode           string              `json:"mode"` // "port" or "tunnel"
+	ForwardName    string              `json:"forwardName"`
+	ForwardStatus  int                 `json:"forwardStatus"`
+	ForwardExists  bool                `json:"forwardExists"`
+	TunnelID       int64               `json:"tunnelId"`
+	TunnelName     string              `json:"tunnelName"`
+	RemoteAddr     string              `json:"remoteAddr"`
+	Entries        []repo.ForwardEntry `json:"entries"`
+	CreatedTime    int64               `json:"createdTime"`
 	// Latency is the line's last measurement (relay_latency.go).
 	Latency *relayLatency `json:"latency,omitempty"`
 }
@@ -76,22 +77,23 @@ func (h *Handler) relayViews(inboundID int64) ([]relayView, error) {
 	out := make([]relayView, 0, len(rows))
 	for _, rw := range rows {
 		v := relayView{
-			ID:            rw.ID,
-			InboundID:     rw.InboundID,
-			ForwardID:     rw.ForwardID,
-			Name:          rw.Name,
-			ShareHost:     rw.ShareHost,
-			Managed:       rw.Managed == 1,
-			Mode:          relayMode(rw.TunnelType),
-			ForwardName:   rw.ForwardName,
-			ForwardStatus: rw.ForwardStatus,
-			ForwardExists: rw.ForwardExists,
-			TunnelID:      rw.TunnelID,
-			TunnelName:    rw.TunnelName,
-			RemoteAddr:    rw.RemoteAddr,
-			Entries:       []repo.ForwardEntry{},
-			CreatedTime:   rw.CreatedTime,
-			Latency:       h.relayLatencyView(rw.ID),
+			ID:             rw.ID,
+			InboundID:      rw.InboundID,
+			ForwardID:      rw.ForwardID,
+			Name:           rw.Name,
+			ShareHost:      rw.ShareHost,
+			TargetIPFamily: firstNonEmpty(rw.TargetIPFamily, "auto"),
+			Managed:        rw.Managed == 1,
+			Mode:           relayMode(rw.TunnelType),
+			ForwardName:    rw.ForwardName,
+			ForwardStatus:  rw.ForwardStatus,
+			ForwardExists:  rw.ForwardExists,
+			TunnelID:       rw.TunnelID,
+			TunnelName:     rw.TunnelName,
+			RemoteAddr:     rw.RemoteAddr,
+			Entries:        []repo.ForwardEntry{},
+			CreatedTime:    rw.CreatedTime,
+			Latency:        h.relayLatencyView(rw.ID),
 		}
 		if rw.ForwardExists {
 			if entries, err := h.repo.ForwardEntries(rw.ForwardID, rw.TunnelID); err == nil && entries != nil {
@@ -162,6 +164,9 @@ func (h *Handler) relayTarget(row *model.NodeInbound, tunnel *tunnelRecord) (str
 		if v4 := strings.TrimSpace(node.ServerIPV4.String); host == "" && v4 != "" {
 			host = v4
 		}
+		if host == "" {
+			host = nodeShareIP(node, true)
+		}
 	}
 	if host == "" {
 		return "", errors.New("节点没有可用地址")
@@ -175,11 +180,13 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		InboundID int64  `json:"inboundId"`
-		TunnelID  int64  `json:"tunnelId"`
-		InPort    int    `json:"inPort"`
-		Name      string `json:"name"`
-		ShareHost string `json:"shareHost"`
+		InboundID      int64  `json:"inboundId"`
+		TunnelID       int64  `json:"tunnelId"`
+		InPort         int    `json:"inPort"`
+		Name           string `json:"name"`
+		ShareHost      string `json:"shareHost"`
+		InIP           string `json:"inIp"`
+		TargetIPFamily string `json:"targetIpFamily"`
 	}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -204,7 +211,7 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("隧道已禁用"))
 		return
 	}
-	remoteAddr, err := h.relayTarget(row, tunnel)
+	remoteAddr, err := h.relayTargetForFamily(row, tunnel, req.TargetIPFamily)
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
@@ -229,18 +236,19 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 	if row.AcceptProxyProtocol == 1 {
 		ppSend = relayProxyProtocolVersion
 	}
-	forwardID, err := h.createRelayForward(userID, name, tunnel, remoteAddr, req.InPort, ppSend)
+	forwardID, err := h.createRelayForward(userID, name, tunnel, remoteAddr, req.InPort, req.InIP, ppSend)
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	rel := &model.NodeInboundRelay{
-		InboundID:   row.ID,
-		ForwardID:   forwardID,
-		Name:        name,
-		ShareHost:   shareHost,
-		Managed:     1,
-		CreatedTime: time.Now().UnixMilli(),
+		InboundID:      row.ID,
+		ForwardID:      forwardID,
+		Name:           name,
+		ShareHost:      shareHost,
+		TargetIPFamily: strings.TrimSpace(req.TargetIPFamily),
+		Managed:        1,
+		CreatedTime:    time.Now().UnixMilli(),
 	}
 	if err := h.repo.CreateInboundRelay(rel); err != nil {
 		if fwd, ferr := h.getForwardRecord(forwardID); ferr == nil && fwd != nil {
@@ -264,7 +272,7 @@ func firstNonEmpty(values ...string) string {
 
 // createRelayForward mirrors the admin path of forwardCreate: same port
 // validation, persistence and runtime sync, without user-facing quota checks.
-func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRecord, remoteAddr string, inPort int, proxyProtocolSend int) (int64, error) {
+func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRecord, remoteAddr string, inPort int, inIP string, proxyProtocolSend int) (int64, error) {
 	entryNodes, err := h.tunnelEntryNodeIDs(tunnel.ID)
 	if err != nil {
 		return 0, err
@@ -280,6 +288,10 @@ func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRe
 		if err := h.validateNftablesForwardRequest(tunnel, remoteAddr, entryNodes); err != nil {
 			return 0, err
 		}
+	}
+	inIP, err = h.relayBindIP(entryNodes, inIP, isNftTunnel)
+	if err != nil {
+		return 0, err
 	}
 	port := inPort
 	if port <= 0 {
@@ -310,7 +322,7 @@ func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRe
 		userName = "admin"
 	}
 	forwardID, err := h.repo.CreateForwardTx(userID, userName, name, tunnel.ID, remoteAddr, "fifo", now,
-		h.repo.NextIndex("forward"), entryNodes, port, "", nil, 0, 0, nil, 0, 0, proxyProtocolSend)
+		h.repo.NextIndex("forward"), entryNodes, port, inIP, nil, 0, 0, nil, 0, 0, proxyProtocolSend)
 	if err != nil {
 		return 0, err
 	}

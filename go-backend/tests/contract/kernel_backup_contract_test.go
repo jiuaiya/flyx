@@ -25,6 +25,9 @@ func TestInboundBackupRoundTripContract(t *testing.T) {
 		t.Fatalf("import: %+v", out)
 	}
 	_, forwardID := seedRelayForward(t, r, 1, relayNode, 0, 30005, inboundID)
+	if err := r.DB().Exec(`UPDATE node_inbound_relay SET target_ip_family = 'ipv4' WHERE forward_id = ?`, forwardID).Error; err != nil {
+		t.Fatal(err)
+	}
 	settingsBefore := mustQueryString(t, r, `SELECT settings FROM node_inbound WHERE id = ?`, inboundID)
 	group := saveNodeGroup(t, router, admin, `{"name":"东京组","inboundIds":[`+jsonInt64(inboundID)+`],"options":{"prefix":"[JP] "}}`)
 	if out := kernelContractPost(t, router, admin, "/api/v1/subscription/save", `{"name":"备份订阅","groupIds":[`+jsonInt64(group)+`]}`); out.Code != 0 {
@@ -66,6 +69,9 @@ func TestInboundBackupRoundTripContract(t *testing.T) {
 	}
 	if mustQueryInt(t, r, `SELECT COUNT(*) FROM node_inbound_relay WHERE inbound_id = ? AND forward_id = ?`, inboundID, forwardID) != 1 {
 		t.Fatal("the relay link must come back")
+	}
+	if got := mustQueryString(t, r, `SELECT target_ip_family FROM node_inbound_relay WHERE forward_id = ?`, forwardID); got != "ipv4" {
+		t.Fatalf("relay address family must survive backup restore: %q", got)
 	}
 	if mustQueryString(t, r, `SELECT options FROM node_group WHERE id = ?`, group) != `{"lines":"","regions":[],"protocols":[],"include":"","exclude":"","rename":"","addFlag":false,"prefix":"[JP] ","dedupe":false,"sort":"","script":""}` ||
 		mustQueryString(t, r, `SELECT group_ids FROM subscription WHERE name = '备份订阅'`) != jsonInt64(group) {
