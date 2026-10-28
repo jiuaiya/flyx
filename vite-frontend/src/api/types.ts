@@ -994,6 +994,8 @@ export interface InboundRelayApiItem {
   name: string;
   shareHost: string;
   targetIpFamily?: "auto" | "ipv4" | "ipv6";
+  /** Explicit bind address; empty uses the server's default listener. */
+  inIp?: string;
   managed: boolean;
   mode: "port" | "tunnel";
   forwardName: string;

@@ -24,6 +24,7 @@ type relayView struct {
 	Name           string              `json:"name"`
 	ShareHost      string              `json:"shareHost"`
 	TargetIPFamily string              `json:"targetIpFamily"`
+	InIP           string              `json:"inIp"`
 	Managed        bool                `json:"managed"`
 	Mode           string              `json:"mode"` // "port" or "tunnel"
 	ForwardName    string              `json:"forwardName"`
@@ -98,6 +99,9 @@ func (h *Handler) relayViews(inboundID int64) ([]relayView, error) {
 		if rw.ForwardExists {
 			if entries, err := h.repo.ForwardEntries(rw.ForwardID, rw.TunnelID); err == nil && entries != nil {
 				v.Entries = entries
+			}
+			if ports, err := h.listForwardPorts(rw.ForwardID); err == nil && len(ports) == 1 {
+				v.InIP = strings.TrimSpace(ports[0].InIP)
 			}
 		}
 		out = append(out, v)
@@ -367,17 +371,19 @@ func (h *Handler) removeForwardWithServices(forward *forwardRecord) error {
 	return nil
 }
 
-// inboundRelayUpdate renames a relay and changes its share host. Both only
-// feed share links and subscriptions, so nothing is pushed to the nodes.
+// Address fields are optional so older clients can still rename a relay
+// without changing its listeners or landing address.
 func (h *Handler) inboundRelayUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
 	var req struct {
-		ID        int64  `json:"id"`
-		Name      string `json:"name"`
-		ShareHost string `json:"shareHost"`
+		ID             int64   `json:"id"`
+		Name           string  `json:"name"`
+		ShareHost      string  `json:"shareHost"`
+		InIP           *string `json:"inIp"`
+		TargetIPFamily *string `json:"targetIpFamily"`
 	}
 	if err := decodeJSON(r.Body, &req); err != nil || req.ID <= 0 {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -402,8 +408,13 @@ func (h *Handler) inboundRelayUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("分享地址过长"))
 		return
 	}
-	if err := h.repo.UpdateInboundRelay(rel.ID, name, shareHost); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+	warnings, err := h.saveRelayUpdate(rel, name, shareHost, req.InIP, req.TargetIPFamily)
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if len(warnings) > 0 {
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但" + strings.Join(warnings, "；"), TS: time.Now().UnixMilli()})
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())

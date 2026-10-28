@@ -4,6 +4,7 @@ import type {
   NodeApiItem,
   TunnelApiItem,
 } from "@/api/types";
+import type { RelayIPFamily } from "@/pages/inbound/relay-addresses";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
@@ -29,12 +30,7 @@ import {
   ModalHeader,
 } from "@/shadcn-bridge/heroui/modal";
 import { Select, SelectItem } from "@/shadcn-bridge/heroui/select";
-import {
-  relayEntryIPs,
-  relayIPLabel,
-  relayTargetIPs,
-  type RelayIPFamily,
-} from "@/pages/inbound/relay-addresses";
+import { RelayAddressFields } from "@/pages/inbound/relay-address-fields";
 
 const modalBase =
   "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden";
@@ -102,6 +98,9 @@ export function RelayModal({
     id: number;
     name: string;
     shareHost: string;
+    tunnelId: number;
+    inIp: string;
+    targetIpFamily: RelayIPFamily;
   } | null>(null);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState<InboundRelayApiItem | null>(null);
@@ -176,11 +175,6 @@ export function RelayModal({
     (o) => String(o.tunnel.id) === form.tunnelId,
   )?.route;
   const selectedTunnel = tunnels.find((t) => String(t.id) === form.tunnelId);
-  const entryIPs = relayEntryIPs(selectedTunnel, nodes);
-  const targetIPs = relayTargetIPs(item, selectedTunnel, nodes);
-  const ipv6Entry = entryIPs.find((ip) => ip.includes(":"));
-  const multiEntry = (selectedTunnel?.inNodeId?.length ?? 0) > 1;
-  const nftEntry = selectedTunnel?.forwardMode === "nftables";
 
   const create = async () => {
     if (!item || !form.tunnelId) {
@@ -239,10 +233,17 @@ export function RelayModal({
     }
     setSaving(true);
     try {
+      const original = relays.find((rel) => rel.id === editing.id);
       const res = await updateInboundRelay({
         id: editing.id,
         name: editing.name.trim(),
         shareHost: editing.shareHost.trim(),
+        inIp:
+          editing.inIp !== (original?.inIp || "") ? editing.inIp : undefined,
+        targetIpFamily:
+          editing.targetIpFamily !== (original?.targetIpFamily || "auto")
+            ? editing.targetIpFamily
+            : undefined,
       });
 
       if (res.code !== 0) {
@@ -250,7 +251,9 @@ export function RelayModal({
 
         return;
       }
-      toast.success("已保存");
+      if (res.msg.startsWith("已保存，但"))
+        toast(res.msg, { icon: "⚠️", duration: 6000 });
+      else toast.success("已保存");
       setEditing(null);
       await load();
       onChanged();
@@ -317,6 +320,24 @@ export function RelayModal({
                           key={rel.id}
                           className="space-y-3 rounded-xl border border-primary/40 px-3 py-3"
                         >
+                          <p className="text-xs text-default-500">
+                            {rel.tunnelName} · 编辑中转
+                          </p>
+                          {rel.forwardExists && (
+                            <RelayAddressFields
+                              inbound={item}
+                              nodes={nodes}
+                              tunnel={tunnels.find(
+                                (t) => t.id === editing.tunnelId,
+                              )}
+                              value={editing}
+                              onChange={(addresses) =>
+                                setEditing((p) =>
+                                  p ? { ...p, ...addresses } : p,
+                                )
+                              }
+                            />
+                          )}
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <Input
                               label="名称"
@@ -329,8 +350,9 @@ export function RelayModal({
                               }
                             />
                             <Input
+                              description="留空自动使用入口地址，可填写自定义域名"
                               label="分享地址"
-                              placeholder="默认入口 IP"
+                              placeholder={editing.inIp || "自动跟随入口 IP"}
                               value={editing.shareHost}
                               variant="bordered"
                               onChange={(e) =>
@@ -426,6 +448,9 @@ export function RelayModal({
                                 id: rel.id,
                                 name: rel.name,
                                 shareHost: rel.shareHost,
+                                tunnelId: rel.tunnelId,
+                                inIp: rel.inIp || "",
+                                targetIpFamily: rel.targetIpFamily || "auto",
                               })
                             }
                           >
@@ -489,97 +514,15 @@ export function RelayModal({
                         开启入站白名单后，会自动放行出口服务器的地址。
                       </p>
                     )}
-                    {selectedTunnel && (
-                      <div className="space-y-3 rounded-lg bg-default-50 p-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-sm font-medium">连接地址</p>
-                          {ipv6Entry && targetIPs.ipv4 && (
-                            <Button
-                              color="primary"
-                              size="sm"
-                              variant="flat"
-                              onPress={() =>
-                                setForm((p) => ({
-                                  ...p,
-                                  inIp: ipv6Entry,
-                                  targetIpFamily: "ipv4",
-                                }))
-                              }
-                            >
-                              IPv6 入站 → IPv4 落地
-                            </Button>
-                          )}
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <Select
-                            description={
-                              multiEntry
-                                ? "多入口隧道使用各服务器默认监听地址"
-                                : nftEntry
-                                  ? "nftables 使用服务器默认转发地址"
-                                  : "客户端连接的入口 IP，订阅自动使用该地址"
-                            }
-                            isDisabled={entryIPs.length === 0}
-                            label="入口监听 IP"
-                            selectedKeys={[form.inIp || "__default__"]}
-                            onSelectionChange={(keys) => {
-                              const ip = String(
-                                Array.from(keys)[0] ?? "__default__",
-                              );
-
-                              setForm((p) => ({
-                                ...p,
-                                inIp: ip === "__default__" ? "" : ip,
-                              }));
-                            }}
-                          >
-                            <SelectItem key="__default__">
-                              服务器默认监听
-                            </SelectItem>
-                            {entryIPs.map((ip) => (
-                              <SelectItem key={ip}>
-                                {relayIPLabel(ip)}
-                              </SelectItem>
-                            ))}
-                          </Select>
-                          <Select
-                            description="中转或出口服务器连接落地时使用的地址"
-                            disabledKeys={["ipv4", "ipv6"].filter(
-                              (family) => !targetIPs[family as RelayIPFamily],
-                            )}
-                            label="连接落地地址"
-                            selectedKeys={[form.targetIpFamily]}
-                            onSelectionChange={(keys) =>
-                              setForm((p) => ({
-                                ...p,
-                                targetIpFamily: String(
-                                  Array.from(keys)[0] ?? "auto",
-                                ) as RelayIPFamily,
-                              }))
-                            }
-                          >
-                            <SelectItem key="auto">自动选择</SelectItem>
-                            <SelectItem key="ipv4">
-                              {targetIPs.ipv4
-                                ? `IPv4 · ${targetIPs.ipv4}`
-                                : "IPv4（无可用地址）"}
-                            </SelectItem>
-                            <SelectItem key="ipv6">
-                              {targetIPs.ipv6
-                                ? `IPv6 · ${targetIPs.ipv6}`
-                                : "IPv6（无可用地址）"}
-                            </SelectItem>
-                          </Select>
-                        </div>
-                        <p className="break-all text-xs text-default-500">
-                          {form.inIp ? relayIPLabel(form.inIp) : "默认入口"}
-                          {" → "}
-                          {form.targetIpFamily === "auto"
-                            ? "自动连接落地"
-                            : `${form.targetIpFamily === "ipv6" ? "IPv6" : "IPv4"} · ${targetIPs[form.targetIpFamily] || "地址不可用"}`}
-                        </p>
-                      </div>
-                    )}
+                    <RelayAddressFields
+                      inbound={item}
+                      nodes={nodes}
+                      tunnel={selectedTunnel}
+                      value={form}
+                      onChange={(addresses) =>
+                        setForm((p) => ({ ...p, ...addresses }))
+                      }
+                    />
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <Input
                         label="入口端口"

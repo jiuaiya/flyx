@@ -30,6 +30,7 @@ func TestInboundRelayIPv6EntryIPv4TargetContract(t *testing.T) {
 	defer server.Close()
 	var mu sync.Mutex
 	var services []map[string]interface{}
+	rejectNewBind := false
 	stop := startMockNodeSessionWithCommandRecorder(t, server.URL, "entry-secret", func(cmd string, data json.RawMessage) (bool, string) {
 		if cmd == "UpdateService" || cmd == "AddService" {
 			var configs []map[string]interface{}
@@ -38,7 +39,13 @@ func TestInboundRelayIPv6EntryIPv4TargetContract(t *testing.T) {
 			}
 			mu.Lock()
 			services = append(services, configs...)
+			reject := rejectNewBind
 			mu.Unlock()
+			for _, config := range configs {
+				if reject && config["addr"] == "[2001:db8::7]:30002" {
+					return true, "mock rejected new listener"
+				}
+			}
 		}
 		return false, ""
 	})
@@ -85,6 +92,86 @@ func TestInboundRelayIPv6EntryIPv4TargetContract(t *testing.T) {
 	}
 	if relay == nil || relay["host"] != "2001:db8::7" || !strings.Contains(relay["uri"].(string), "@[2001:db8::7]:30002?") {
 		t.Fatalf("share must follow IPv6 listener: %v", relay)
+	}
+
+	relayID := int64(out.Data.(map[string]interface{})["id"].(float64))
+	update := func(fields string) int {
+		t.Helper()
+		res := kernelContractPost(t, router, admin, "/api/v1/inbound/relay/update",
+			`{"id":`+jsonInt64(relayID)+`,"name":"edited","shareHost":"",`+fields+`}`)
+		return res.Code
+	}
+	if code := update(`"inIp":"198.51.100.7","targetIpFamily":"ipv6"`); code != 0 {
+		t.Fatalf("edit address fields: code %d", code)
+	}
+	if got := mustQueryString(t, r, `SELECT in_ip FROM forward_port WHERE forward_id = ?`, forwardID); got != "198.51.100.7" {
+		t.Fatalf("edited IPv4 bind: %q", got)
+	}
+	if got := mustQueryString(t, r, `SELECT remote_addr FROM forward WHERE id = ?`, forwardID); got != "[2001:db8::10]:443" {
+		t.Fatalf("edited IPv6 target: %q", got)
+	}
+	mu.Lock()
+	matched = map[string]bool{}
+	for _, service := range services {
+		if service["addr"] == "198.51.100.7:30002" {
+			targets := service["forwarder"].(map[string]interface{})["nodes"].([]interface{})
+			if targets[0].(map[string]interface{})["addr"] == "[2001:db8::10]:443" {
+				matched[service["listener"].(map[string]interface{})["type"].(string)] = true
+			}
+		}
+	}
+	beforeMetadata := len(services)
+	mu.Unlock()
+	if !matched["tcp"] || !matched["udp"] {
+		t.Fatalf("edit did not update both running services: %v", matched)
+	}
+	// Older edit forms omit address fields and must preserve explicit settings.
+	res := kernelContractPost(t, router, admin, "/api/v1/inbound/relay/update",
+		`{"id":`+jsonInt64(relayID)+`,"name":"renamed","shareHost":"relay.example.com"}`)
+	if res.Code != 0 {
+		t.Fatalf("metadata-only edit: %+v", res)
+	}
+	mu.Lock()
+	afterMetadata := len(services)
+	mu.Unlock()
+	if afterMetadata != beforeMetadata {
+		t.Fatal("renaming must not restart forward services")
+	}
+	if mustQueryString(t, r, `SELECT target_ip_family FROM node_inbound_relay WHERE id = ?`, relayID) != "ipv6" ||
+		mustQueryString(t, r, `SELECT in_ip FROM forward_port WHERE forward_id = ?`, forwardID) != "198.51.100.7" {
+		t.Fatal("metadata-only edit reset the saved addresses")
+	}
+	list := kernelContractPost(t, router, admin, "/api/v1/inbound/relay/list", `{"inboundId":`+jsonInt64(inboundID)+`}`)
+	listed := list.Data.([]interface{})[0].(map[string]interface{})
+	if listed["inIp"] != "198.51.100.7" || listed["targetIpFamily"] != "ipv6" {
+		t.Fatalf("edit form cannot restore the configured addresses: %v", listed)
+	}
+	for _, fields := range []string{`"inIp":"2001:db8::999"`, `"targetIpFamily":"invalid"`} {
+		if code := update(fields); code == 0 {
+			t.Fatalf("invalid edit succeeded: %s", fields)
+		}
+	}
+	if mustQueryString(t, r, `SELECT name FROM node_inbound_relay WHERE id = ?`, relayID) != "renamed" {
+		t.Fatal("rejected address edit changed relay metadata")
+	}
+	if code := update(`"inIp":"","targetIpFamily":"auto"`); code != 0 {
+		t.Fatalf("reset to defaults: code %d", code)
+	}
+	if mustQueryString(t, r, `SELECT COALESCE(in_ip, '') FROM forward_port WHERE forward_id = ?`, forwardID) != "" ||
+		mustQueryString(t, r, `SELECT target_ip_family FROM node_inbound_relay WHERE id = ?`, relayID) != "auto" {
+		t.Fatal("default address selection was not restored")
+	}
+	// A rejected live update restores both the database and the old services.
+	mu.Lock()
+	rejectNewBind = true
+	mu.Unlock()
+	if code := update(`"inIp":"2001:db8::7","targetIpFamily":"ipv4"`); code == 0 {
+		t.Fatal("failed node dispatch must fail the edit")
+	}
+	if mustQueryString(t, r, `SELECT COALESCE(in_ip, '') FROM forward_port WHERE forward_id = ?`, forwardID) != "" ||
+		mustQueryString(t, r, `SELECT remote_addr FROM forward WHERE id = ?`, forwardID) != "[2001:db8::10]:443" ||
+		mustQueryString(t, r, `SELECT target_ip_family FROM node_inbound_relay WHERE id = ?`, relayID) != "auto" {
+		t.Fatal("failed dispatch left partially changed relay addresses")
 	}
 
 	// Older clients omit both fields and retain the default entry and target.

@@ -1369,11 +1369,13 @@ export const createInboundRelay = (data: {
   inIp?: string;
   targetIpFamily?: "auto" | "ipv4" | "ipv6";
 }) => Network.post<{ id: number }>("/inbound/relay/create", data);
-/** Renames a relay and changes its share host; the forward is untouched. */
+/** Address fields are optional; omitted fields preserve the running forward. */
 export const updateInboundRelay = (data: {
   id: number;
   name: string;
   shareHost: string;
+  inIp?: string;
+  targetIpFamily?: "auto" | "ipv4" | "ipv6";
 }) => Network.post("/inbound/relay/update", data);
 export const deleteInboundRelay = (id: number, force = false) =>
   Network.post("/inbound/relay/delete", { id, force });

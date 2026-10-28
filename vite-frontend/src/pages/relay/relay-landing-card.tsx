@@ -15,6 +15,76 @@ function relayLabel(line: InboundRelayApiItem): string {
   return cut > 0 ? full.slice(0, cut) : full;
 }
 
+function addressFamily(host: string): string {
+  if (host.includes(":")) return "IPv6";
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host)) return "IPv4";
+
+  return "域名";
+}
+
+function targetAddresses(remoteAddr: string): string[] {
+  return remoteAddr
+    .split(/[,\n]/)
+    .map((address) => address.trim())
+    .filter(Boolean);
+}
+
+function addressHost(address: string): string {
+  const bracketed = address.match(/^\[([^\]]+)\](?::\d+)?$/);
+
+  if (bracketed) return bracketed[1];
+
+  return address.match(/^([^:]+):\d+$/)?.[1] ?? address;
+}
+
+function RelayEndpoint({
+  label,
+  name,
+  addresses,
+  shareHost,
+}: {
+  label: "入口" | "出口目标";
+  name: string;
+  addresses: string[];
+  shareHost?: string;
+}) {
+  const families = [
+    ...new Set(addresses.map((address) => addressFamily(addressHost(address)))),
+  ];
+
+  return (
+    <div className="min-w-0 space-y-1.5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="text-sm text-default-500">{label}</span>
+        {families.map((family) => (
+          <Chip
+            key={family}
+            className="shrink-0 px-2 py-0.5 text-xs"
+            color={label === "入口" ? "primary" : "success"}
+            size="sm"
+            variant="flat"
+          >
+            {family}
+          </Chip>
+        ))}
+      </div>
+      <p className="break-all text-base font-medium leading-6">{name}</p>
+      <div className="space-y-1 text-xs text-default-500">
+        {addresses.length > 0 ? (
+          addresses.map((address) => (
+            <p key={address} className="break-all font-mono">
+              {address}
+            </p>
+          ))
+        ) : (
+          <p>暂无地址</p>
+        )}
+        {shareHost && <p className="break-all">分享地址：{shareHost}</p>}
+      </div>
+    </div>
+  );
+}
+
 function ForwardStatus({ line }: { line: InboundRelayApiItem }) {
   const text = !line.forwardExists
     ? "转发已删除"
@@ -107,22 +177,28 @@ export function RelayLandingCard({
             {lines.map((line) => (
               <li key={line.id} className="space-y-2">
                 <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 rounded-lg bg-default-100/60 px-4 py-2.5">
-                  <div className="min-w-0 space-y-1">
-                    <p className="text-sm text-default-500">中转入口</p>
-                    <p className="break-all text-base font-medium leading-6">
-                      {relayLabel(line)}
-                    </p>
-                  </div>
+                  <RelayEndpoint
+                    addresses={[
+                      ...new Set(
+                        line.entries.map(
+                          (entry) =>
+                            `${entry.Host.includes(":") ? `[${entry.Host}]` : entry.Host}:${entry.Port}`,
+                        ),
+                      ),
+                    ]}
+                    label="入口"
+                    name={relayLabel(line)}
+                    shareHost={line.shareHost || undefined}
+                  />
                   <ArrowRight
                     aria-hidden="true"
                     className="h-5 w-5 text-default-400"
                   />
-                  <div className="min-w-0 space-y-1">
-                    <p className="text-sm text-default-500">落地</p>
-                    <p className="break-all text-base font-medium leading-6">
-                      {inbound.name}
-                    </p>
-                  </div>
+                  <RelayEndpoint
+                    addresses={[...new Set(targetAddresses(line.remoteAddr))]}
+                    label="出口目标"
+                    name={inbound.name}
+                  />
                 </div>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-divider pt-2">
                   <ForwardStatus line={line} />
