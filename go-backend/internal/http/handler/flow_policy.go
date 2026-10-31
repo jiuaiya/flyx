@@ -59,7 +59,20 @@ func (h *Handler) processFlowItem(nodeID int64, item flowItem) {
 	}
 	metas, err := h.repo.GetFlowUploadForwardMetas(collectFlowUploadForwardIDs([]flowItem{item}))
 	if err != nil {
-		metas = nil
+		log.Printf("flow metadata read failed node_id=%d err=%v", nodeID, err)
+		return
+	}
+	if err := validateFlowUploadItems([]flowItem{item}, metas); err != nil {
+		log.Printf("flow upload rejected node_id=%d err=%v", nodeID, err)
+		return
+	}
+	if err := validateFlowUploadItems([]flowItem{item}, metas); err != nil {
+		log.Printf("flow upload rejected node_id=%d err=%v", nodeID, err)
+		return
+	}
+	if err := validateFlowUploadItems([]flowItem{item}, metas); err != nil {
+		log.Printf("flow upload rejected node_id=%d err=%v", nodeID, err)
+		return
 	}
 	h.applyFlowUploadBatch(nodeID, h.buildNodeFlowUploadBatch(nodeID, []flowItem{item}, metas), time.Now())
 }
@@ -223,22 +236,6 @@ func (h *Handler) enforcePeerShareFlowLimit(shareID int64) {
 	if err := h.cleanupPeerShareRuntimes(shareID); err != nil {
 		log.Printf("peer share quota cleanup pending share_id=%d err=%v", shareID, err)
 	}
-}
-
-func (h *Handler) scaleFlowByTunnel(forwardID int64, inFlow int64, outFlow int64) (int64, int64) {
-	forward, err := h.getForwardRecord(forwardID)
-	if err != nil || forward == nil {
-		return inFlow, outFlow
-	}
-
-	tunnel, err := h.getTunnelRecord(forward.TunnelID)
-	if err != nil || tunnel == nil {
-		return inFlow, outFlow
-	}
-
-	scaledIn := int64(float64(inFlow)*tunnel.TrafficRatio) * tunnel.Flow
-	scaledOut := int64(float64(outFlow)*tunnel.TrafficRatio) * tunnel.Flow
-	return scaledIn, scaledOut
 }
 
 func (h *Handler) enforceFlowPolicies(userID int64, userTunnelID int64) {
@@ -412,7 +409,10 @@ func (h *Handler) pauseUserTunnelForwards(userID int64, tunnelID int64, now int6
 func (h *Handler) pauseForwardRecords(forwards []forwardRecord, now int64) {
 	for i := range forwards {
 		forward := forwards[i]
-		_ = h.controlForwardServices(&forward, "PauseService", false)
+		if err := h.controlForwardServices(&forward, "PauseService", false); err != nil {
+			log.Printf("flow policy pause failed forward=%d: %v", forward.ID, err)
+			continue
+		}
 		_ = h.repo.UpdateForwardStatus(forward.ID, 0, now)
 	}
 }

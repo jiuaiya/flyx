@@ -14,14 +14,15 @@ import (
 	"strings"
 	"time"
 
+	"go-backend/internal/config"
 	"go-backend/internal/http/response"
 )
 
 const (
 	panelDeployDirEnv                 = "PANEL_DEPLOY_DIR"
 	panelBackendContainerEnv          = "PANEL_BACKEND_CONTAINER"
-	defaultPanelDeployDir             = "/opt/flvx-panel"
-	defaultPanelBackendName           = "flux-panel-backend"
+	defaultPanelDeployDir             = "/opt/flyx-panel"
+	defaultPanelBackendName           = "flyx-panel-backend"
 	dockerSocketPath                  = "/var/run/docker.sock"
 	maxSystemUpgradeComposeAssetBytes = 1 << 20
 	systemUpgradeMessage              = "升级 helper 已启动，面板服务将短暂重启"
@@ -151,7 +152,7 @@ func newSystemUpgradeExecutor() *systemUpgradeExecutor {
 }
 
 func currentPanelVersion() string {
-	version := strings.TrimSpace(os.Getenv("FLUX_VERSION"))
+	version := strings.TrimSpace(config.IdentityEnv("FLYX_VERSION", "FLUX_VERSION"))
 	if version == "" {
 		return "dev"
 	}
@@ -268,10 +269,28 @@ log "等待旧容器释放资源..."
 sleep 3
 
 log "重启服务（force-recreate）..."
-if ! docker compose up -d --force-recreate --remove-orphans backend frontend >> "$LOGFILE" 2>&1; then
-  log "错误: 重启服务失败"
-  exit 1
+UPOUT="$PANEL_DEPLOY_DIR/.upgrade-compose.out"
+if ! docker compose up -d --force-recreate --remove-orphans backend frontend > "$UPOUT" 2>&1; then
+  cat "$UPOUT" >> "$LOGFILE"
+  # 3.4.0 renamed the network's Compose key; the existing network keeps the
+  # other key in its label and Compose refuses it. Recreate the network.
+  NETWORK=$(sed -n 's/.*network \([^ ]*\) was found but has incorrect label com\.docker\.compose\.network.*/\1/p' "$UPOUT" | head -n 1)
+  rm -f "$UPOUT"
+  if [ -z "$NETWORK" ]; then
+    log "错误: 重启服务失败"
+    exit 1
+  fi
+  log "网络 $NETWORK 的标签与 Compose 配置不一致，停止服务并重建网络（数据卷保留）..."
+  docker compose down --remove-orphans >> "$LOGFILE" 2>&1 || true
+  if ! docker network rm "$NETWORK" >> "$LOGFILE" 2>&1 || ! docker compose up -d >> "$LOGFILE" 2>&1; then
+    log "错误: 重启服务失败"
+    exit 1
+  fi
+  log "升级完成"
+  exit 0
 fi
+cat "$UPOUT" >> "$LOGFILE"
+rm -f "$UPOUT"
 
 log "升级完成"
 `
@@ -314,25 +333,20 @@ func (e *systemUpgradeExecutor) updateEnvVersion(envPath, version string) error 
 	if err != nil {
 		return err
 	}
-	lines := strings.Split(string(data), "\n")
-	replaced := false
-	for i, line := range lines {
-		if strings.HasPrefix(line, "FLUX_VERSION=") {
-			lines[i] = "FLUX_VERSION=" + version
-			replaced = true
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	for _, key := range []string{"FLYX_VERSION", "FLUX_VERSION"} {
+		found := false
+		for i, line := range lines {
+			if strings.HasPrefix(line, key+"=") {
+				lines[i] = key + "=" + version
+				found = true
+			}
+		}
+		if !found {
+			lines = append(lines, key+"="+version)
 		}
 	}
-	if !replaced {
-		trimmed := strings.TrimRight(strings.Join(lines, "\n"), "\n")
-		if trimmed == "" {
-			trimmed = "FLUX_VERSION=" + version
-		} else {
-			trimmed += "\nFLUX_VERSION=" + version
-		}
-		return writeFileWithMode(envPath, []byte(trimmed+"\n"), mode)
-	}
-	content := strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
-	return writeFileWithMode(envPath, []byte(content), mode)
+	return writeFileWithMode(envPath, []byte(strings.Join(lines, "\n")+"\n"), mode)
 }
 
 func (e *systemUpgradeExecutor) backupFile(path string) (string, error) {
@@ -397,40 +411,45 @@ func (h *Handler) buildSystemUpgradeDownloadURL(version, filename string) string
 	return base
 }
 
-func (h *Handler) fetchSystemUpgradeReleases(perPage int) ([]githubRelease, error) {
-	if perPage <= 0 {
-		perPage = 20
+// fetchSystemUpgradeReleases lists releases through the panel's GitHub
+// proxy when one is set, sharing the cache of node upgrades. A shared proxy
+// often has its API quota used up, so a failure retries directly with the
+// panel's own quota (and GITHUB_TOKEN).
+func (h *Handler) fetchSystemUpgradeReleases() ([]githubRelease, error) {
+	enabled, proxyURL := h.getGithubProxyConfig()
+	if !enabled || isPanelGithubMirror(proxyURL) {
+		return fetchGitHubReleases()
 	}
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	url := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", strings.TrimRight(systemUpgradeAPIBaseURL, "/"), githubRepo, perPage)
-	if enabled, proxyURL := h.getGithubProxyConfig(); enabled && !isPanelGithubMirror(proxyURL) {
-		url = fmt.Sprintf("%s/%s", proxyURL, url)
-	}
-
-	resp, err := systemUpgradeHTTPGet(client, url)
-	if err != nil {
-		return nil, fmt.Errorf("请求GitHub API失败: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("GitHub API返回 %d: %s", resp.StatusCode, string(body))
-	}
-
-	var releases []githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
-		return nil, fmt.Errorf("解析GitHub API响应失败: %v", err)
-	}
-
-	return releases, nil
+	return cachedGitHubReleases(func() ([]githubRelease, error) {
+		client := &http.Client{Timeout: 15 * time.Second}
+		url := fmt.Sprintf("%s/%s/repos/%s/releases?per_page=50", proxyURL, strings.TrimRight(systemUpgradeAPIBaseURL, "/"), githubRepo)
+		resp, err := systemUpgradeHTTPGet(client, url)
+		if err == nil {
+			releases, decodeErr := decodeGitHubReleases(resp)
+			resp.Body.Close()
+			if decodeErr == nil {
+				return releases, nil
+			}
+			err = decodeErr
+		}
+		releases, directErr := requestGitHubReleases()
+		if directErr != nil {
+			return nil, fmt.Errorf("通过加速代理：%v；直连：%w", err, directErr)
+		}
+		return releases, nil
+	})
 }
 
 func (h *Handler) resolveSystemUpgradeLatestReleaseByChannel(channel string) (string, error) {
 	normalizedChannel := normalizeReleaseChannel(channel)
-	releases, err := h.fetchSystemUpgradeReleases(50)
+	releases, err := h.fetchSystemUpgradeReleases()
 	if err != nil {
+		// The github.com redirect is not rate limited like the API.
+		if normalizedChannel == releaseChannelStable {
+			if tag, redirectErr := latestStableFromRedirect(); redirectErr == nil {
+				return tag, nil
+			}
+		}
 		return "", err
 	}
 
@@ -611,7 +630,7 @@ func (h *Handler) systemCheckUpdates(w http.ResponseWriter, r *http.Request) {
 	exec := newSystemUpgradeExecutor()
 	capability := exec.capability(r.Context())
 
-	githubReleases, err := h.fetchSystemUpgradeReleases(50)
+	githubReleases, err := h.fetchSystemUpgradeReleases()
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("获取版本列表失败: %v", err)))
 		return
@@ -706,7 +725,7 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 	exec.composeProject = exec.detectComposeProject(r.Context())
 	exec.hostDeployDir = exec.detectHostDeployDir(r.Context())
-	helperName := fmt.Sprintf("flvx-upgrade-helper-%d", time.Now().Unix())
+	helperName := fmt.Sprintf("flyx-upgrade-helper-%d", time.Now().Unix())
 	helperContainer, err := exec.startHelper(r.Context(), imageID, helperName)
 	if err != nil {
 		if restoreErr := exec.restoreUpgradeBackups(composePath, envPath); restoreErr != nil {

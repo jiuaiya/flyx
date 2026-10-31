@@ -1,7 +1,9 @@
+# Legacy defaults let pre-migration upgraders reuse their existing resources.
+# New installations write explicit FLYX resource names into .env.
 services:
   backend:
-    image: ghcr.io/jiuaiya/flux-panel-backend:${FLUX_VERSION:-latest}
-    container_name: flux-panel-backend
+    image: ghcr.io/jiuaiya/flyx-panel-backend:${FLYX_VERSION:-${FLUX_VERSION:-latest}}
+    container_name: ${PANEL_BACKEND_CONTAINER:-flux-panel-backend}
     restart: unless-stopped
     logging:
       driver: json-file
@@ -13,19 +15,21 @@ services:
       DB_PATH: /app/data/gost.db
       DATABASE_URL: ${DATABASE_URL:-}
       JWT_SECRET: ${JWT_SECRET}
-      FLVX_WEBAUTHN_ORIGIN: ${FLVX_WEBAUTHN_ORIGIN:-}
+      FLYX_WEBAUTHN_ORIGIN: ${FLYX_WEBAUTHN_ORIGIN-${FLVX_WEBAUTHN_ORIGIN:-}}
+      FLVX_WEBAUTHN_ORIGIN: ${FLYX_WEBAUTHN_ORIGIN-${FLVX_WEBAUTHN_ORIGIN:-}}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       SERVER_ADDR: :6365
       TZ: Asia/Shanghai
-      FLUX_VERSION: ${FLUX_VERSION:-dev}
-      PANEL_DEPLOY_DIR: /opt/flvx-panel
-      PANEL_BACKEND_CONTAINER: flux-panel-backend
+      FLYX_VERSION: ${FLYX_VERSION:-${FLUX_VERSION:-dev}}
+      FLUX_VERSION: ${FLYX_VERSION:-${FLUX_VERSION:-dev}}
+      PANEL_DEPLOY_DIR: /opt/flyx-panel
+      PANEL_BACKEND_CONTAINER: ${PANEL_BACKEND_CONTAINER:-flux-panel-backend}
     ports:
       - "${BACKEND_PORT}:6365"
     volumes:
       - sqlite_data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./:/opt/flvx-panel
+      - ./:/opt/flyx-panel
     networks:
       - gost-network
     stop_grace_period: 30s
@@ -39,7 +43,7 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: flux-panel-postgres
+    container_name: ${PANEL_POSTGRES_CONTAINER:-flux-panel-postgres}
     restart: unless-stopped
     logging:
       driver: json-file
@@ -62,8 +66,8 @@ services:
       start_period: 20s
 
   frontend:
-    image: ghcr.io/jiuaiya/vite-frontend:${FLUX_VERSION:-latest}
-    container_name: vite-frontend
+    image: ghcr.io/jiuaiya/flyx-panel-frontend:${FLYX_VERSION:-${FLUX_VERSION:-latest}}
+    container_name: ${PANEL_FRONTEND_CONTAINER:-vite-frontend}
     restart: unless-stopped
     logging:
       driver: json-file
@@ -81,16 +85,19 @@ services:
 
 volumes:
   sqlite_data:
-    name: sqlite_data
+    name: ${FLYX_SQLITE_VOLUME:-sqlite_data}
     driver: local
   postgres_data:
-    name: postgres_data
+    name: ${FLYX_POSTGRES_VOLUME:-postgres_data}
     driver: local
 
 
 networks:
+  # Keep this key: Compose stores it in the network's
+  # com.docker.compose.network label and refuses to reuse an existing
+  # network whose label differs, which breaks every upgrade.
   gost-network:
-    name: gost-network
+    name: ${FLYX_NETWORK:-gost-network}
     driver: bridge
     ipam:
       config:

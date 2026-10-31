@@ -84,7 +84,7 @@ func worker(id int, args []string, ctx *context.Context, ret *int) {
 	}
 }
 
-func init() {
+func parseFlags() {
 	var printVersion bool
 
 	flag.Var(&services, "L", "service list")
@@ -106,6 +106,17 @@ func init() {
 }
 
 func main() {
+	parseFlags()
+	if err := disableCoreDumps(); err != nil {
+		fmt.Printf("⚠️ 关闭 core dump 失败: %v\n", err)
+	}
+	if removed, freed := removeCoreDumps("."); removed > 0 {
+		fmt.Printf("🧹 已清理 %d 个 core dump 文件，释放 %.1f MB\n", removed, float64(freed)/(1<<20))
+	}
+	// Before the container env recreates config.json and reconnects.
+	if socket.AgentUninstalled() {
+		idleAfterUninstall()
+	}
 	if err := ApplyEnvConfig("config.json"); err != nil {
 		fmt.Printf("❌ 写入环境变量配置失败: %v\n", err)
 		os.Exit(1)
@@ -134,6 +145,10 @@ func main() {
 	}
 	fullVersion := fmt.Sprintf("%s (%s/%s)", version, distro, runtime.GOARCH)
 	service.SetHTTPReportURL(config.Addr, config.Secret)
+	if err := service.ConfigureTrafficSpool(".", config.Addr+"\x00"+config.Secret); err != nil {
+		logger.Default().Fatalf("traffic spool unavailable: %v", err)
+		return
+	}
 
 	p := &program{
 		startReporter: func() reporter {

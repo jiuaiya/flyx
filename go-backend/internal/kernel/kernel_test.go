@@ -45,6 +45,81 @@ func TestNormalizeFillsCredentials(t *testing.T) {
 	}
 }
 
+// Mihomo's support-x25519mlkem768 needs server support, so an imported node
+// keeps whatever its source says and never gets it added.
+func TestClashImportedRealityKeepsSourceMLKEMSetting(t *testing.T) {
+	tests := []struct {
+		name        string
+		proxy       Proxy
+		wantSupport bool
+	}{
+		{
+			name: "source without it",
+			proxy: Proxy{"type": "vless", "server": "example.com", "reality-opts": map[string]interface{}{
+				"public-key": "pub", "short-id": "sid",
+			}},
+		},
+		{
+			name: "source with it",
+			proxy: Proxy{"type": "vless", "server": "example.com", "reality-opts": map[string]interface{}{
+				"public-key": "pub", "short-id": "sid", "support-x25519mlkem768": true,
+			}},
+			wantSupport: true,
+		},
+		{name: "VLESS TLS", proxy: Proxy{"type": "vless", "server": "example.com", "tls": true}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node, ok := proxyClash(Endpoint{Name: "test", Host: "example.com", Port: 443, Proxy: tt.proxy, PostQuantumReality: true})
+			if !ok {
+				t.Fatal("proxyClash rejected supported proxy")
+			}
+			var got bool
+			for _, field := range node {
+				if field.Key != "reality-opts" {
+					continue
+				}
+				options, ok := field.Value.(map[string]interface{})
+				if !ok {
+					t.Fatalf("reality-opts has type %T", field.Value)
+				}
+				got, _ = options["support-x25519mlkem768"].(bool)
+			}
+			if got != tt.wantSupport {
+				t.Fatalf("support-x25519mlkem768 = %v, want %v; node: %s", got, tt.wantSupport, marshalYAML(node))
+			}
+		})
+	}
+}
+
+func TestClashBuiltVLESSRealityOffersMLKEMOnlyWhenServerSupportsIt(t *testing.T) {
+	for _, supported := range []bool{true, false} {
+		e := Endpoint{
+			Name: "VLESS Reality",
+			Host: "example.com",
+			Port: 443,
+			Inbound: Inbound{
+				Protocol:  ProtocolVLESS,
+				Transport: Transport{Type: TransportTCP},
+				Security: Security{
+					Type: SecurityReality, SNI: "example.com", Fingerprint: "chrome",
+					RealityPublicKey: "pub", RealityShortIDs: []string{"sid"},
+				},
+			},
+			PostQuantumReality: supported,
+		}
+
+		got, _, err := Subscription(FormatClash, []Endpoint{e}, SubOptions{})
+		if err != nil {
+			t.Fatalf("render Mihomo subscription: %v", err)
+		}
+		if has := strings.Contains(got, "support-x25519mlkem768: true"); has != supported {
+			t.Fatalf("server support %v, field present %v:\n%s", supported, has, got)
+		}
+	}
+}
+
 func TestNormalizeRejectsUnsupportedCombos(t *testing.T) {
 	cases := []struct {
 		name string
@@ -447,7 +522,7 @@ func TestNormalizePhase3Rules(t *testing.T) {
 func TestSingboxACMEAndNaive(t *testing.T) {
 	acme := Security{Type: SecurityTLS, CertMode: CertModeACME, SNI: "hk.example.com", ACMEEmail: "me@example.com"}
 	list := []Inbound{
-		{ID: 1, Protocol: ProtocolNaive, Port: 443, Settings: Settings{Username: "flvx", Password: "naive-secret"}, Security: acme},
+		{ID: 1, Protocol: ProtocolNaive, Port: 443, Settings: Settings{Username: "flyx", Password: "naive-secret"}, Security: acme},
 		{ID: 2, Protocol: ProtocolHysteria2, Port: 443, Transport: Transport{Type: TransportQUIC}, Settings: Settings{Password: "hy2-secret"}, Security: acme},
 		{ID: 3, Protocol: ProtocolTrojan, Port: 8443, Settings: Settings{Password: "trojan-secret"},
 			Security: Security{Type: SecurityTLS, CertMode: CertModeACME, SNI: "cf.example.com", ACMEDNS: ACMEDNSCloudflare, ACMEDNSKey: "cf-token"}},
@@ -509,7 +584,7 @@ func TestSingboxACMEAndNaive(t *testing.T) {
 	naive := list[0]
 	direct := Endpoint{Name: "naive", Host: "hk.example.com", Port: 443, Inbound: naive, Direct: true}
 	relay := Endpoint{Name: "relay", Host: "198.51.100.7", Port: 31000, Inbound: naive}
-	if uri, _ := ShareURI(direct); uri != "naive+https://flvx:naive-secret@hk.example.com:443#naive" {
+	if uri, _ := ShareURI(direct); uri != "naive+https://flyx:naive-secret@hk.example.com:443#naive" {
 		t.Fatalf("naive uri: %s", uri)
 	}
 	if uri, _ := ShareURI(relay); !strings.Contains(uri, "@198.51.100.7:31000?sni=hk.example.com#") {

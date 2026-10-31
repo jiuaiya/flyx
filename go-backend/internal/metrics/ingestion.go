@@ -2,10 +2,12 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"go-backend/internal/monitoring"
 	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
@@ -27,23 +29,20 @@ type SystemInfo struct {
 	NetOutSpeed      int64   `json:"net_out_speed"`
 }
 
-// NodeTrafficRetention keeps a little over a year of hourly node traffic.
+// NodeTrafficRetention keeps a little over a year of node traffic.
 const NodeTrafficRetention = 400 * 24 * time.Hour
-
-type trafficKey struct {
-	node, hour int64
-}
 
 type IngestionService struct {
 	repo          *repo.Repository
 	nodeBuffer    []*model.NodeMetric
 	nodeBufferMu  sync.Mutex
 	flushInterval time.Duration
+	lastMetric    map[int64]*model.NodeMetric
 
-	// Keep uptime and receipt time with the counters so delayed reports and
-	// disappearing virtual interfaces cannot look like a machine reboot.
-	lastMetric map[int64]*model.NodeMetric
-	traffic    map[trafficKey][2]int64
+	flushMu  sync.Mutex
+	stream   string
+	sequence int64
+	pending  []*model.NodeMetric
 }
 
 func NewIngestionService(repo *repo.Repository) *IngestionService {
@@ -52,44 +51,9 @@ func NewIngestionService(repo *repo.Repository) *IngestionService {
 		nodeBuffer:    make([]*model.NodeMetric, 0, 500),
 		flushInterval: 30 * time.Second,
 		lastMetric:    map[int64]*model.NodeMetric{},
-		traffic:       map[trafficKey][2]int64{},
+		stream:        uuid.NewString(),
+		sequence:      1,
 	}
-}
-
-// A counter can fall when an interface disappears or the agent changes which
-// interfaces it reports. Only a confirmed reboot may count the new value in full.
-func counterDelta(prev, cur int64) int64 {
-	if cur >= prev {
-		return cur - prev
-	}
-	return 0
-}
-
-// NodeTrafficDelta also serves offline repairs of retained raw metrics. A lower
-// uptime is a reboot only if the new uptime fits in the time since the previous
-// report (plus five seconds of sampling/clock tolerance). Otherwise it is stale.
-func NodeTrafficDelta(prev, cur *model.NodeMetric) (in, out int64, accepted bool) {
-	if cur.NetInBytes < 0 || cur.NetOutBytes < 0 {
-		return 0, 0, false
-	}
-	if prev == nil {
-		return 0, 0, true
-	}
-	if prev.Uptime > 0 && cur.Uptime == 0 {
-		return 0, 0, false
-	}
-	if prev.Uptime > 0 && cur.Uptime > 0 && cur.Uptime < prev.Uptime {
-		elapsed := (cur.Timestamp - prev.Timestamp) / 1000
-		if elapsed < 0 || cur.Uptime > elapsed+5 {
-			return 0, 0, false
-		}
-		return cur.NetInBytes, cur.NetOutBytes, true
-	}
-	if cur.Uptime > 0 && cur.Uptime == prev.Uptime &&
-		(cur.NetInBytes < prev.NetInBytes || cur.NetOutBytes < prev.NetOutBytes) {
-		return 0, 0, false
-	}
-	return counterDelta(prev.NetInBytes, cur.NetInBytes), counterDelta(prev.NetOutBytes, cur.NetOutBytes), true
 }
 
 func (s *IngestionService) Start(ctx context.Context) {
@@ -132,22 +96,14 @@ func (s *IngestionService) RecordNodeMetric(nodeID int64, info SystemInfo) {
 	}
 
 	s.nodeBufferMu.Lock()
-	in, out, accepted := NodeTrafficDelta(s.lastMetric[nodeID], m)
-	if !accepted {
+	if _, _, accepted := NodeTrafficDelta(s.lastMetric[nodeID], m); !accepted {
 		s.nodeBufferMu.Unlock()
 		return
 	}
-	s.nodeBuffer = append(s.nodeBuffer, m)
-	shouldFlush := len(s.nodeBuffer) >= 200
-	// The first report after a panel restart only sets the baseline.
-	if s.lastMetric[nodeID] != nil {
-		k := trafficKey{nodeID, m.Timestamp - m.Timestamp%int64(time.Hour/time.Millisecond)}
-		t := s.traffic[k]
-		t[0] += in
-		t[1] += out
-		s.traffic[k] = t
-	}
 	s.lastMetric[nodeID] = m
+	s.nodeBuffer = append(s.nodeBuffer, m)
+	shouldFlush := len(s.nodeBuffer) == 200
+
 	s.nodeBufferMu.Unlock()
 
 	if shouldFlush {
@@ -156,31 +112,39 @@ func (s *IngestionService) RecordNodeMetric(nodeID int64, info SystemInfo) {
 }
 
 func (s *IngestionService) flushNodeMetrics() {
-	s.nodeBufferMu.Lock()
-	if len(s.nodeBuffer) == 0 {
-		s.nodeBufferMu.Unlock()
-		return
-	}
-	buffer := s.nodeBuffer
-	s.nodeBuffer = make([]*model.NodeMetric, 0, 500)
-	traffic := s.traffic
-	s.traffic = map[trafficKey][2]int64{}
-	s.nodeBufferMu.Unlock()
-
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
 	if s.repo == nil {
 		return
 	}
-	if err := s.repo.InsertNodeMetricBatch(buffer); err != nil {
-		log.Printf("monitoring write failed op=node_metric.flush count=%d err=%v", len(buffer), err)
+	for {
+		if len(s.pending) == 0 {
+			s.nodeBufferMu.Lock()
+			s.pending, s.nodeBuffer = s.nodeBuffer, make([]*model.NodeMetric, 0, 500)
+			s.nodeBufferMu.Unlock()
+		}
+		if len(s.pending) == 0 {
+			return
+		}
+		err := s.repo.SaveNodeMetricBatch(s.stream, s.sequence, s.pending)
+		var gap *repo.TrafficSequenceGap
+		if errors.As(err, &gap) {
+			// This producer lives in the panel, not the Agent upload queue.
+			// A lost/rolled-back receipt cannot be repaired by retrying the
+			// old sequence. Keep pending intact and retry once with a fresh
+			// stream; further write failures retain that new identity.
+			log.Printf("node history cursor gap stream=%s sequence=%d expected=%d; starting new stream", s.stream, s.sequence, gap.Expected)
+			s.stream, s.sequence = uuid.NewString(), 1
+			err = s.repo.SaveNodeMetricBatch(s.stream, s.sequence, s.pending)
+		}
+		if err != nil {
+			log.Printf("monitoring write failed op=node_metric.flush count=%d err=%v", len(s.pending), err)
+			return
+		}
+		s.pending = nil
+		s.sequence++
 	}
-	rows := make([]model.NodeTraffic, 0, len(traffic))
-	for k, v := range traffic {
-		// Keep observed idle hours too, so charts distinguish zero from no report.
-		rows = append(rows, model.NodeTraffic{NodeID: k.node, Hour: k.hour, InBytes: v[0], OutBytes: v[1]})
-	}
-	if err := s.repo.AddNodeTraffic(rows); err != nil {
-		log.Printf("monitoring write failed op=node_traffic.flush count=%d err=%v", len(rows), err)
-	}
+
 }
 
 func (s *IngestionService) pruneMetrics() {

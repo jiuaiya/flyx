@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"go-backend/internal/store/repo"
+	"path/filepath"
 	"testing"
 
 	"go-backend/internal/store/model"
@@ -32,16 +34,24 @@ func TestNodeTrafficDelta(t *testing.T) {
 }
 
 func TestStaleTrafficDoesNotReplaceBaseline(t *testing.T) {
-	s := NewIngestionService(nil)
+	r, err := repo.Open(filepath.Join(t.TempDir(), "traffic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	s := NewIngestionService(r)
 	s.RecordNodeMetric(2, SystemInfo{Uptime: 10000, BytesReceived: 54000000000, BytesTransmitted: 51000000000})
 	s.RecordNodeMetric(2, SystemInfo{Uptime: 9995, BytesReceived: 53999920000, BytesTransmitted: 50999900000})
 	s.RecordNodeMetric(2, SystemInfo{Uptime: 10005, BytesReceived: 54000000100, BytesTransmitted: 51000000200})
-	var in, out int64
-	for _, delta := range s.traffic {
-		in += delta[0]
-		out += delta[1]
+	if len(s.nodeBuffer) != 2 {
+		t.Fatalf("stale metric affected buffer: %d", len(s.nodeBuffer))
 	}
-	if in != 100 || out != 200 || len(s.nodeBuffer) != 2 {
-		t.Fatalf("stale metric affected traffic: in=%d out=%d samples=%d", in, out, len(s.nodeBuffer))
+	s.flushNodeMetrics()
+	totals, err := r.NodeTrafficSince(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if totals[2] != [2]int64{100, 200} {
+		t.Fatalf("stale metric affected traffic: %v", totals)
 	}
 }

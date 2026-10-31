@@ -3,6 +3,7 @@ package handler
 import (
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -64,11 +65,23 @@ func TestGithubProxyDefaultsAndSavedSettings(t *testing.T) {
 				t.Fatalf("panel download URL = %q, want %q", got, wantPanel)
 			}
 			var gotAPI string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotAPI = releaseAPIBase + r.URL.RequestURI()
+				_, _ = io.WriteString(w, "[]")
+			}))
+			defer srv.Close()
+			oldAPI, oldUpgradeAPI := releaseAPIBase, systemUpgradeAPIBaseURL
+			releaseAPIBase, systemUpgradeAPIBaseURL = srv.URL, srv.URL
+			resetReleaseCache()
+			defer func() {
+				releaseAPIBase, systemUpgradeAPIBaseURL = oldAPI, oldUpgradeAPI
+				resetReleaseCache()
+			}()
 			systemUpgradeHTTPGet = func(_ *http.Client, url string) (*http.Response, error) {
 				gotAPI = url
 				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("[]"))}, nil
 			}
-			if _, err := h.fetchSystemUpgradeReleases(50); err != nil {
+			if _, err := h.fetchSystemUpgradeReleases(); err != nil {
 				t.Fatal(err)
 			}
 			wantAPI := prefix + strings.TrimRight(systemUpgradeAPIBaseURL, "/") + "/repos/" + githubRepo + "/releases?per_page=50"

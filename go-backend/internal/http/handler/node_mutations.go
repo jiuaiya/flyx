@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"go-backend/internal/http/response"
+	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
 )
 
@@ -308,15 +310,23 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
-	id := idFromBody(r, w)
-	if id <= 0 {
+	var req map[string]interface{}
+	if err := decodeJSON(r.Body, &req); err != nil {
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
-	if err := h.deleteNodeByID(id); err != nil {
+	id := asInt64(req["id"], 0)
+	if id <= 0 {
+		response.WriteJSON(w, response.ErrDefault("id不能为空"))
+		return
+	}
+	// Without the flag (older API clients) only the panel record is removed.
+	result, err := h.deleteNode(id, asBool(req["uninstall"], false))
+	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	response.WriteJSON(w, response.OKEmpty())
+	response.WriteJSON(w, response.OK(result))
 }
 
 func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
@@ -326,10 +336,10 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		ID      int64  `json:"id"`
-		Channel string `json:"channel"`
-		// Mode "docker" returns a docker run command instead of install.sh.
-		Mode string `json:"mode"`
+		ID         int64  `json:"id"`
+		Channel    string `json:"channel"`
+		Mode       string `json:"mode"`
+		Privileged bool   `json:"privileged"`
 	}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
@@ -361,32 +371,128 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	if req.Mode == "docker" {
-		response.WriteJSON(w, response.OK(dockerInstallCommand(version, processServerAddress(panelAddr), secret)))
-		return
-	}
 	enabled, proxyURL := h.getGithubProxyConfig()
 
 	var cmd string
+	address := processServerAddress(panelAddr)
 	if enabled {
 		cmd = fmt.Sprintf("curl -L %s/https://github.com/%s/releases/download/%s/install.sh -o ./install.sh && chmod +x ./install.sh && PROXY_ENABLED=true PROXY_URL=%s VERSION=%s ./install.sh -a %s -s %s",
-			proxyURL, githubRepo, version, proxyURL, version, processServerAddress(panelAddr), secret)
+			proxyURL, githubRepo, version, proxyURL, version, address, secret)
 	} else {
 		cmd = fmt.Sprintf("curl -L https://github.com/%s/releases/download/%s/install.sh -o ./install.sh && chmod +x ./install.sh && PROXY_ENABLED=false VERSION=%s ./install.sh -a %s -s %s",
-			githubRepo, version, version, processServerAddress(panelAddr), secret)
+			githubRepo, version, version, address, secret)
 	}
-	response.WriteJSON(w, response.OK(cmd))
+	switch strings.ToLower(strings.TrimSpace(req.Mode)) {
+	case "docker":
+		response.WriteJSON(w, response.OK(dockerInstallCommand(version, address, secret, req.Privileged)))
+	case "docker-compose":
+		response.WriteJSON(w, response.OK(dockerComposeInstallCommand(version, address, secret, req.Privileged)))
+	case "all":
+		response.WriteJSON(w, response.OK(nodeInstallCommands{
+			Script:                  cmd,
+			Docker:                  dockerInstallCommand(version, address, secret, false),
+			DockerPrivileged:        dockerInstallCommand(version, address, secret, true),
+			DockerCompose:           dockerComposeInstallCommand(version, address, secret, false),
+			DockerComposePrivileged: dockerComposeInstallCommand(version, address, secret, true),
+		}))
+	default:
+		response.WriteJSON(w, response.OK(cmd))
+	}
+}
+
+type nodeInstallCommands struct {
+	Script                  string `json:"script"`
+	Docker                  string `json:"docker"`
+	DockerPrivileged        string `json:"dockerPrivileged"`
+	DockerCompose           string `json:"dockerCompose"`
+	DockerComposePrivileged string `json:"dockerComposePrivileged"`
 }
 
 // dockerInstallCommand runs the agent image published with the release.
 // Host networking lets forwards listen on any port, NET_ADMIN is for the
 // nftables counters and whitelists, and the restart policy brings the
 // container back after a one-click upgrade. An existing container of the
-// same name is replaced, so the command also reinstalls.
-func dockerInstallCommand(version, panelAddr, secret string) string {
+// same name is replaced, so the command also reinstalls. flux-panel and FLVX
+// also run a flux_agent container; only one running our image is taken over.
+func dockerInstallCommand(version, panelAddr, secret string, privileged bool) string {
 	owner := strings.ToLower(strings.SplitN(githubRepo, "/", 2)[0])
-	return fmt.Sprintf("docker rm -f flux_agent >/dev/null 2>&1; docker run -d --name flux_agent --restart unless-stopped --network host --cap-add NET_ADMIN -v /etc/flux_agent:/etc/flux_agent -e FLUX_AGENT_ADDR=%s -e FLUX_AGENT_SECRET=%s ghcr.io/%s/flux-agent:%s",
-		panelAddr, secret, owner, version)
+	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
+	privilegedFlag := ""
+	if privileged {
+		privilegedFlag = " --privileged"
+	}
+	script := fmt.Sprintf(`set -eu
+name=flyx-agent
+data=/etc/flyx-agent
+destination=/etc/flyx-agent
+current=$(docker inspect -f '{{.Name}}' flyx-agent 2>/dev/null || true)
+legacy=$(docker inspect -f '{{.Config.Image}}' flux_agent 2>/dev/null || true)
+case "$legacy" in ghcr.io/%s/*) ;; *) legacy= ;; esac
+if [ -n "$current" ] && [ -n "$legacy" ]; then
+  echo '同时发现新旧节点容器，请先确认要重装的实例' >&2
+  exit 1
+fi
+if [ -n "$legacy" ]; then name=flux_agent; destination=/etc/flux_agent; fi
+if [ -n "$current$legacy" ]; then
+  data=$(docker inspect -f '{{range .Mounts}}{{if or (eq .Destination "/etc/flyx-agent") (eq .Destination "/etc/flux_agent")}}{{if eq .Type "volume"}}{{.Name}}{{else}}{{.Source}}{{end}}{{println}}{{end}}{{end}}' "$name")
+  case "$data" in ''|*'
+'*) echo '无法唯一识别节点数据挂载，重装已停止' >&2; exit 1;; esac
+fi
+image=%s
+if ! docker pull "$image"; then
+  image=%s
+  docker pull "$image"
+  destination=/etc/flux_agent
+fi
+if [ -n "$current$legacy" ]; then docker rm -f "$name"; fi
+docker run -d --name "$name" --restart unless-stopped --network host --cap-add NET_ADMIN%s \
+  -v "$data:$destination" -e FLYX_AGENT_DATA_DIR="$destination" \
+  -e FLYX_AGENT_ADDR=%s -e FLUX_AGENT_ADDR=%s \
+  -e FLYX_AGENT_SECRET=%s -e FLUX_AGENT_SECRET=%s "$image"`,
+		owner, quote("ghcr.io/"+owner+"/flyx-agent:"+version), quote("ghcr.io/"+owner+"/flux-agent:"+version), privilegedFlag, quote(panelAddr), quote(panelAddr), quote(secret), quote(secret))
+	return "sh -c " + quote(script)
+}
+
+// dockerComposeInstallCommand keeps the compose file under a stable directory
+// so reinstalling and changing the privileged switch only rewrites one file.
+func dockerComposeInstallCommand(version, panelAddr, secret string, privileged bool) string {
+	owner := strings.ToLower(strings.SplitN(githubRepo, "/", 2)[0])
+	privilegedLine := ""
+	if privileged {
+		privilegedLine = "    privileged: true\n"
+	}
+	// Compose interpolates "$" in values; doubling it keeps the secret intact.
+	value := func(v string) string { return strconv.Quote(strings.ReplaceAll(v, "$", "$$")) }
+	return fmt.Sprintf(`case "$(docker inspect -f '{{.Config.Image}}' flux_agent 2>/dev/null || true)" in ghcr.io/%s/*)
+  echo '检测到旧版 flux_agent 容器；请先使用 Docker 安装命令升级，或停止并移除旧容器后再执行。' >&2
+  exit 1;;
+esac
+mkdir -p /opt/docker/flyx-agent
+# The file holds the node secret: create it unreadable to other users.
+(umask 077 && cat > /opt/docker/flyx-agent/docker-compose.yaml) <<'EOF'
+services:
+  flyx-agent:
+    image: ghcr.io/%s/flyx-agent:%s
+    container_name: flyx-agent
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+%s    volumes:
+      - /etc/flyx-agent:/etc/flyx-agent
+    environment:
+      FLYX_AGENT_DATA_DIR: "/etc/flyx-agent"
+      FLYX_AGENT_ADDR: %s
+      FLUX_AGENT_ADDR: %s
+      FLYX_AGENT_SECRET: %s
+      FLUX_AGENT_SECRET: %s
+EOF
+chmod 600 /opt/docker/flyx-agent/docker-compose.yaml
+if docker container inspect flyx-agent >/dev/null 2>&1; then
+  docker rm -f flyx-agent >/dev/null
+fi
+docker compose -f /opt/docker/flyx-agent/docker-compose.yaml up -d`,
+		owner, owner, version, privilegedLine, value(panelAddr), value(panelAddr), value(secret), value(secret))
 }
 
 func (h *Handler) nodeUpdateOrder(w http.ResponseWriter, r *http.Request) {
@@ -438,14 +544,32 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
-	ids := idsFromBody(r, w)
-	if ids == nil {
+	var req map[string]interface{}
+	if err := decodeJSON(r.Body, &req); err != nil {
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
-	for _, id := range ids {
-		_ = h.deleteNodeByID(id)
+	var ids []int64
+	for _, x := range asAnySlice(req["ids"]) {
+		if id := asInt64(x, 0); id > 0 {
+			ids = append(ids, id)
+		}
 	}
-	response.WriteJSON(w, response.OKEmpty())
+	if len(ids) == 0 {
+		response.WriteJSON(w, response.ErrDefault("ids不能为空"))
+		return
+	}
+	uninstall := asBool(req["uninstall"], false)
+	summary := nodeBatchDeleteResult{}
+	for _, id := range ids {
+		result, err := h.deleteNode(id, uninstall)
+		if err != nil {
+			summary.Failed++
+			continue
+		}
+		summary.add(result)
+	}
+	response.WriteJSON(w, response.OK(summary))
 }
 
 func (h *Handler) nodeCheckStatus(w http.ResponseWriter, r *http.Request) {
@@ -466,6 +590,88 @@ func (h *Handler) nodeCheckStatus(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) deleteNodeByID(id int64) error {
 	return h.repo.DeleteNodeCascade(id)
+}
+
+// Agent uninstall outcomes reported to the panel when a server is deleted.
+const (
+	nodeUninstallDone        = "done"        // the agent confirmed and is removing itself
+	nodeUninstallPending     = "pending"     // offline: it uninstalls when it reconnects
+	nodeUninstallUnsupported = "unsupported" // the agent is too old to uninstall itself
+)
+
+type nodeDeleteResult struct {
+	Uninstall string   `json:"uninstall,omitempty"`
+	Warnings  []string `json:"warnings,omitempty"`
+}
+
+type nodeBatchDeleteResult struct {
+	Deleted     int      `json:"deleted"`
+	Failed      int      `json:"failed"`
+	Uninstalled int      `json:"uninstalled"`
+	Pending     int      `json:"pending"`
+	Unsupported int      `json:"unsupported"`
+	Warnings    []string `json:"warnings,omitempty"`
+}
+
+func (s *nodeBatchDeleteResult) add(r nodeDeleteResult) {
+	s.Deleted++
+	switch r.Uninstall {
+	case nodeUninstallDone:
+		s.Uninstalled++
+	case nodeUninstallPending:
+		s.Pending++
+	case nodeUninstallUnsupported:
+		s.Unsupported++
+	}
+	s.Warnings = append(s.Warnings, r.Warnings...)
+}
+
+// deleteNode uninstalls the agent first, when asked, while the server record
+// and its SSH configuration still exist.
+func (h *Handler) deleteNode(id int64, uninstall bool) (nodeDeleteResult, error) {
+	var result nodeDeleteResult
+	if uninstall {
+		node, err := h.repo.GetNodeByID(id)
+		if err != nil {
+			return result, err
+		}
+		if node != nil {
+			result = h.uninstallNodeAgent(node)
+		}
+	}
+	return result, h.deleteNodeByID(id)
+}
+
+func (h *Handler) uninstallNodeAgent(node *model.Node) nodeDeleteResult {
+	var result nodeDeleteResult
+	warn := func(format string, args ...interface{}) {
+		result.Warnings = append(result.Warnings, node.Name+"："+fmt.Sprintf(format, args...))
+	}
+	// nftables forwards are applied over SSH by the panel, not by the agent.
+	if _, err := h.repo.GetNodeSSHConfig(node.ID); err == nil {
+		if err := h.clearNftablesNode(node.ID); err != nil {
+			warn("清理 nftables 转发规则失败：%v", err)
+		}
+	}
+	if h.wsServer != nil && h.wsServer.IsNodeOnline(node.ID) {
+		_, err := h.wsServer.SendCommand(node.ID, "UninstallAgent", nil, 15*time.Second)
+		if err == nil {
+			result.Uninstall = nodeUninstallDone
+			return result
+		}
+		if strings.Contains(err.Error(), "未知命令") {
+			warn("agent 版本过旧，不支持自动卸载，请在服务器上手动卸载")
+			result.Uninstall = nodeUninstallUnsupported
+			return result
+		}
+		warn("卸载命令未确认（%v），将在 agent 重新连接时卸载", err)
+	}
+	if err := h.repo.AddNodeUninstall(node.Secret, node.Name, time.Now()); err != nil {
+		warn("记录待卸载失败：%v，请在服务器上手动卸载", err)
+		return result
+	}
+	result.Uninstall = nodeUninstallPending
+	return result
 }
 
 func normalizeNodeRenewalCycle(v string) string {

@@ -10,32 +10,42 @@ agent 装在要搭节点或当中转的服务器上：连接面板，负责转�
 
 ## 用面板生成的命令安装（推荐）
 
-1. **服务器** 页新建服务器，点击 **安装**，在弹出的窗口里选 **一键脚本** 或 **Docker**，点 **复制**
+1. **服务器** 页新建服务器，点击 **安装**，在弹出的窗口里选 **一键脚本**、**Docker** 或 **Docker Compose**，点 **复制**
 2. 到服务器上以 root 执行，等服务器状态变为 **在线**
 
 ## 用 Docker 安装
 
-服务器已装好 Docker 时，可以用容器运行 agent。在安装窗口切到 **Docker**，复制的命令形如：
+服务器已装好 Docker 时，可以用容器运行 agent。在安装窗口切到 **Docker**，使用面板生成的命令可识别旧容器并保留其挂载。以下命令仅用于全新安装：
 
 ```bash
-docker rm -f flux_agent >/dev/null 2>&1; docker run -d --name flux_agent \
+docker run -d --name flyx-agent \
   --restart unless-stopped --network host --cap-add NET_ADMIN \
-  -v /etc/flux_agent:/etc/flux_agent \
-  -e FLUX_AGENT_ADDR=<面板地址> -e FLUX_AGENT_SECRET=<密钥> \
-  ghcr.io/kure29/flux-agent:<版本>
+  -v /etc/flyx-agent:/etc/flyx-agent \
+  -e FLYX_AGENT_ADDR=<面板地址> -e FLYX_AGENT_SECRET=<密钥> \
+  ghcr.io/kure29/flyx-agent:<版本>
 ```
 
 - `--network host`：转发和入站要按需监听任意端口，必须用宿主机网络
 - `--cap-add NET_ADMIN`：入站流量统计和白名单要用 nftables
-- `/etc/flux_agent`：配置、下载的内核和 agent 程序都在这里，删掉容器重建不会丢
+- `/etc/flyx-agent`：配置、下载的内核和 agent 程序都在这里，删掉容器重建不会丢
 - `--restart unless-stopped`：不能去掉，面板一键升级靠它把容器拉起来
 - 不要和一键脚本安装的 agent 同时运行，二者会抢端口；换成 Docker 前先在原机器上卸载脚本版
 
 **升级**：和脚本安装一样，在 **服务器** 页点 **升级**，agent 下载新版本替换数据目录里的程序后自动重启容器；也可以拉取新版本镜像后重新执行安装命令，镜像里的版本会覆盖数据目录里的程序。
 
-**调优**：容器默认改不了宿主机内核参数，要用调优需要把 `--cap-add NET_ADMIN` 换成 `--privileged`；宿主机重启后需要在面板重新应用一次。
+**调优**：容器默认改不了宿主机内核参数。在安装窗口的 Docker 页打开 **服务器调优** 开关，命令会额外加入 `--privileged`；宿主机重启后需要在面板重新应用一次。
 
-**查看日志**：`docker logs -f flux_agent`
+**查看日志**：新安装使用 `docker logs -f flyx-agent`；旧安装继续使用 `docker logs -f flux_agent`。旧目录 `/etc/flux_agent` 和服务名在升级后仍会保留，详见 [命名兼容](./upgrade.md#flyx-命名兼容)。
+
+## 用 Docker Compose 安装
+
+服务器已安装 Docker Compose 时，在安装窗口切到 **Docker Compose**。生成的命令会检查并创建 `/opt/docker/flyx-agent`，把配置写到 `/opt/docker/flyx-agent/docker-compose.yaml` 并设置为 `600` 权限，然后执行 `docker compose` 启动容器。
+
+- 重复执行安装命令会更新 Compose 配置并重建容器
+- 启动前会检查并移除已存在的 `flyx-agent` 容器，避免容器名冲突
+- 检测到 FLYX 旧版 `flux_agent` 容器时会停止，请先通过 Docker 安装方式完成迁移，避免新旧 agent 同时占用 host 网络；flux-panel / FLVX 的 `flux_agent` 容器不受影响
+- 需要服务器调优时，在安装窗口打开 **服务器调优**，Compose 配置会加入 `privileged: true`
+- Docker Compose 使用 `flyx-agent` 容器名和 `/etc/flyx-agent` 数据目录，不要和 Docker 模式或脚本安装的 agent 同时运行
 
 ## 服务器调优
 
@@ -101,7 +111,7 @@ Alpine Linux 最小化安装若未包含 `curl`，可使用系统自带的 `wget
 wget -O install.sh https://github.com/jiuaiya/flyx/releases/latest/download/install.sh && chmod +x install.sh && ./install.sh
 ```
 
-脚本会在 Alpine 上自动安装 Bash、`curl` 和 CA 证书，并使用 OpenRC 注册、启动和管理 `flux_agent` 服务；其他受支持的 Linux 发行版继续使用 systemd。
+脚本会在 Alpine 上自动安装 Bash、`curl` 和 CA 证书，并使用 OpenRC 注册、启动和管理 `flyx-agent` 服务；其他受支持的 Linux 发行版继续使用 systemd。
 
 **安装过程中会提示输入：**
 - **服务器地址**: 面板端的通信地址（通常是 `http://<面板IP>:<后端端口>`，例如 `http://1.2.3.4:6365`）。
@@ -116,9 +126,9 @@ wget -O install.sh https://github.com/jiuaiya/flyx/releases/latest/download/inst
 
 ## 验证安装
 安装完成后，服务会自动启动。
-- systemd 查看状态: `systemctl status flux_agent`
-- Alpine/OpenRC 查看状态: `rc-service flux_agent status`
-- Docker 查看状态: `docker ps -f name=flux_agent`
+- systemd 查看状态: `systemctl status flyx-agent`
+- Alpine/OpenRC 查看状态: `rc-service flyx-agent status`
+- Docker 查看状态: `docker ps -f name=flyx-agent`
 - 回到面板 **服务器** 页，该服务器状态应显示为 **在线**
 
 服务器离线的排查见 [常见问题](./faq.md#服务器显示离线)。
@@ -126,3 +136,18 @@ wget -O install.sh https://github.com/jiuaiya/flyx/releases/latest/download/inst
 ## 升级 agent
 
 **服务器** 页选择服务器 → **升级**（可以多选批量升级），留空版本即使用最新版。新功能（例如回程检测）需要 agent 跟面板一起升级，见 [升级](./upgrade.md#agent-升级)。
+
+## 删除服务器并卸载 agent
+
+在 **服务器** 页删除服务器（单个或多选批量删除）时，确认窗口里的 **同时卸载服务器上的 agent** 默认勾选，会一并清理这台服务器：
+
+- 停止所有内核（Xray / sing-box 等），删除 agent 建的 nftables 规则（流量统计、入站白名单、端口跳跃）
+- 恢复 [服务器调优](#服务器调优) 前的系统参数和网卡队列，删除调优写入的 `/etc/sysctl.d/99-flyx-tuning.conf` 和 `/etc/modules-load.d/flyx-bbr.conf`
+- 使用 nftables 转发的服务器，面板会通过 SSH 清除它下发的转发规则
+- 脚本安装的 agent：停止并删除 systemd / OpenRC 服务，删除安装目录（`/etc/flyx-agent`，旧安装为 `/etc/flux_agent`）
+
+服务器离线时，面板先删除记录，等这台服务器的 agent 下次连上面板时再自动卸载（180 天内有效）。只想把服务器换到另一个面板时，取消勾选即可，服务器上的 agent 保持原样。
+
+**Docker 安装的 agent** 无法删除自己的容器：卸载后会清空数据目录里的配置和密钥，容器保留但不再连接面板。在服务器上执行 `docker rm -f flyx-agent`（旧安装为 `flux_agent`）删除容器即可；用 Docker Compose 安装的，执行 `docker compose -f /opt/docker/flyx-agent/docker-compose.yaml down` 后删除 `/opt/docker/flyx-agent` 目录（里面的 Compose 文件含有节点密钥）。
+
+自动卸载需要 agent 3.4.2 及以上；更旧的 agent 会提示 **版本过旧**，请在服务器上运行安装脚本选择 **卸载**。

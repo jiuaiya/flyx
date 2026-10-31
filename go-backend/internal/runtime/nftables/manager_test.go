@@ -43,7 +43,7 @@ func TestManagerReconcileAppliesRenderedScript(t *testing.T) {
 	if len(runner.scripts) != 1 {
 		t.Fatalf("expected 1 script, got %d", len(runner.scripts))
 	}
-	if !strings.Contains(runner.scripts[0], `flvx forward:42 dnat tcp`) {
+	if !strings.Contains(runner.scripts[0], `flyx forward:42 dnat tcp`) {
 		t.Fatalf("script missing forward comment:\n%s", runner.scripts[0])
 	}
 	if result.NodeID != 7 || result.Hashes[42] == "" {
@@ -93,7 +93,7 @@ func TestManagerCollectCountersParsesRunnerTableJSON(t *testing.T) {
 				"family": "inet",
 				"table": "flvx",
 				"chain": "forward",
-				"comment": "flvx forward:77 to-target tcp",
+				"comment": "flyx forward:77 to-target tcp",
 				"expr": [
 					{"counter": {"packets": 3, "bytes": 2048}}
 				]
@@ -158,5 +158,31 @@ func TestManagerMethodsRequireInitializedRunner(t *testing.T) {
 
 	if _, err := manager.CollectCounters(context.Background(), cfg); err == nil || err.Error() != expected.Error() {
 		t.Fatalf("expected not initialized error from CollectCounters, got %v", err)
+	}
+}
+
+type blockCleanupRunner struct {
+	fakeRunner
+	cleared  bool
+	clearErr error
+}
+
+func (r *blockCleanupRunner) ClearBlocks(context.Context, SSHConfig) error {
+	r.cleared = true
+	return r.clearErr
+}
+
+func TestManagerClearRemovesQuotaFiltersAndReportsFailure(t *testing.T) {
+	runner := &blockCleanupRunner{clearErr: errors.New("filter cleanup failed")}
+	manager := NewManager(runner)
+	if err := manager.Clear(context.Background(), SSHConfig{}); !errors.Is(err, runner.clearErr) {
+		t.Fatalf("lost cleanup failure: %v", err)
+	}
+	if !runner.cleared || len(runner.scripts) != 1 {
+		t.Fatal("missing NAT or quota cleanup")
+	}
+	runner.clearErr = nil
+	if err := manager.Clear(context.Background(), SSHConfig{}); err != nil {
+		t.Fatal(err)
 	}
 }

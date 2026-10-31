@@ -15,18 +15,6 @@ import {
   rectSortingStrategy,
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
-import {
-  Activity,
-  ArrowUpCircle,
-  Download,
-  Gauge,
-  GripVertical,
-  ListChecks,
-  Pencil,
-  RotateCcw,
-  Trash2,
-  BellOff,
-} from "lucide-react";
 
 import { formatTraffic } from "@/utils/traffic";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
@@ -37,7 +25,7 @@ import {
   getNodeList,
   updateNode,
   deleteNode,
-  getNodeInstallCommand,
+  getNodeInstallCommands,
   updateNodeOrder,
   batchDeleteNodes,
   upgradeNode,
@@ -50,7 +38,6 @@ import {
   getNodeMonthTraffic,
   type ReleaseChannel,
 } from "@/api";
-import { LatencyCell, probePoints } from "@/components/latency-cell";
 import { RouteModal } from "@/components/route-modal";
 import { LatencyTrendModal } from "@/components/lazy-charts";
 import { LatencyTargetsModal } from "@/pages/node/latency-targets-modal";
@@ -66,6 +53,7 @@ import {
   SelectionBar,
 } from "@/components/page-kit";
 import { CARD_GRID } from "@/components/info-card";
+import { NodeOverview } from "@/pages/node/status-card";
 import { getRemoteSyncErrorMessage } from "@/pages/node/display";
 import { NodeTuneModal } from "@/pages/node/tune-modal";
 import { copyWithToast } from "@/utils/clipboard";
@@ -73,9 +61,12 @@ import {
   formatNodeRenewalTime,
   getNodeRenewalCycleLabel,
 } from "@/pages/node/renewal";
-import { buildNodeSystemInfo } from "@/pages/node/system-info";
 import { useNodeOfflineTimers } from "@/pages/node/use-node-offline-timers";
-import { useNodeRealtime } from "@/pages/node/use-node-realtime";
+import { applyNodeRealtimeBatch } from "@/pages/node/realtime-state";
+import {
+  useNodeRealtime,
+  type NodeRealtimeMessage,
+} from "@/pages/node/use-node-realtime";
 import {
   markPageCached,
   pageCached,
@@ -96,7 +87,6 @@ import {
   getNodeReminderEnabled,
   getNodeExpiryMeta,
   mergeNodeRealtimeState,
-  SortableItem,
 } from "@/pages/node/helpers";
 import { NodeFormModal } from "@/pages/node/node-form-modal";
 import {
@@ -110,20 +100,41 @@ import {
   UpgradeNodeModal,
 } from "@/pages/node/agent-modals";
 import { NodeFilterModal } from "@/pages/node/filter-modal";
-import {
-  NodeStatusCard,
-  NodeOverview,
-  type NodeCardAction,
-} from "@/pages/node/status-card";
+import { NodeRow } from "@/pages/node/node-row";
+import { formatUptime, formatFlow, formatChainType } from "@/pages/node/format";
+import { useWideNodeLayout } from "@/pages/node/use-wide-node-layout";
+
+// IPv4/IPv6 格式验证（仅用于判定地址族）
+const ipv4Regex =
+  /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+const ipv6Regex =
+  /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$/;
+
+const validateIpv4Literal = (ip: string): boolean => ipv4Regex.test(ip.trim());
+const validateIpv6Literal = (ip: string): boolean => ipv6Regex.test(ip.trim());
+
+// Hostname/domain validation (no scheme/port)
+const hostnameRegex =
+  /^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(?:\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))*$/;
 
 const PAGE = "node";
+const MOUSE_SENSOR_OPTIONS = { activationConstraint: { distance: 8 } };
+const TOUCH_SENSOR_OPTIONS = {
+  activationConstraint: { delay: 250, tolerance: 8 },
+};
+const KEYBOARD_SENSOR_OPTIONS = {
+  coordinateGetter: sortableKeyboardCoordinates,
+};
 
 export default function NodePage({
   embedded = false,
+  active = true,
   addRequest = 0,
   onOpenMonitor,
 }: {
   embedded?: boolean;
+  /** Pause work while the mounted list is hidden behind monitor details. */
+  active?: boolean;
   /** Bumped by the 节点 page header's 新建节点 when embedded. */
   addRequest?: number;
   /** Opens a node's history charts and service monitors. */
@@ -207,6 +218,7 @@ export default function NodePage({
     : protocolDisabledReason || "等待服务器上线后再设置";
 
   const [selectMode, setSelectMode] = useState(false);
+  const card = true;
   const [sheetNodeId, setSheetNodeId] = useState<number | null>(null);
   const [probingIds, setProbingIds] = useState<Set<number>>(new Set());
   const [routeNode, setRouteNode] = useState<Node | null>(null);
@@ -221,6 +233,9 @@ export default function NodePage({
   const [installCommands, setInstallCommands] = useState<InstallCommands>({
     script: "",
     docker: "",
+    dockerPrivileged: "",
+    dockerCompose: "",
+    dockerComposePrivileged: "",
   });
   const [currentNodeName, setCurrentNodeName] = useState("");
 
@@ -251,22 +266,25 @@ export default function NodePage({
     Record<string, [number, number]>
   >({});
 
-  useEffect(() => {
-    let active = true;
-    const load = async () => {
+  const monthLoading = useRef(false);
+  const loadMonthTraffic = useCallback(async () => {
+    if (monthLoading.current) return;
+    monthLoading.current = true;
+    try {
       const res = await getNodeMonthTraffic();
 
-      if (active && res.code === 0 && res.data) setMonthTraffic(res.data);
-    };
-
-    void load();
-    const timer = window.setInterval(load, 60_000);
-
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
+      if (res.code === 0 && res.data) setMonthTraffic(res.data);
+    } catch {
+      // Retain the last known totals until the next refresh.
+    } finally {
+      monthLoading.current = false;
+    }
   }, []);
+
+  useEffect(() => {
+    if (active) void loadMonthTraffic();
+  }, [active, loadMonthTraffic]);
+  useVisiblePolling(loadMonthTraffic, 60_000, active);
 
   const [upgradeProgress, setUpgradeProgress] = useState<
     Record<number, { stage: string; percent: number; message: string }>
@@ -285,10 +303,11 @@ export default function NodePage({
     );
   }, []);
 
-  const { clearOfflineTimer, scheduleNodeOffline } = useNodeOfflineTimers({
-    delayMs: 3000,
-    onNodeOffline: handleNodeOffline,
-  });
+  const { clearOfflineTimer, scheduleNodeOffline, clearAllOfflineTimers } =
+    useNodeOfflineTimers({
+      delayMs: 3000,
+      onNodeOffline: handleNodeOffline,
+    });
 
   const loadRemoteUsage = useCallback(async () => {
     try {
@@ -393,123 +412,55 @@ export default function NodePage({
     }
   }, []);
 
-  // 处理WebSocket消息
-  const handleWebSocketMessage = (data: any) => {
-    const { id, type, data: messageData } = data;
-    const nodeId = Number(id);
+  const handleWebSocketMessages = useCallback(
+    (messages: NodeRealtimeMessage[]) => {
+      const progressUpdates: typeof upgradeProgress = {};
 
-    if (Number.isNaN(nodeId)) return;
+      for (const { id, type, data } of messages) {
+        const nodeId = Number(id);
 
-    if (type === "status") {
-      if (messageData === 1) {
-        clearOfflineTimer(nodeId);
-        setNodeList((prev) =>
-          prev.map((node) => {
-            if (node.id !== nodeId) return node;
-            if (node.connectionStatus === "online") return node;
+        if (!Number.isFinite(nodeId)) continue;
+        if (type === "status" && data !== 1) {
+          scheduleNodeOffline(nodeId);
+        } else if (type === "status" || type === "info" || type === "metric") {
+          clearOfflineTimer(nodeId);
+        } else if (type === "upgrade_progress") {
+          try {
+            const progress = typeof data === "string" ? JSON.parse(data) : data;
 
-            return { ...node, connectionStatus: "online" };
-          }),
-        );
-      } else {
-        // 离线事件做延迟处理，避免短抖动导致频繁闪烁
-        scheduleNodeOffline(nodeId);
-      }
-    } else if (type === "info") {
-      clearOfflineTimer(nodeId);
-      setNodeList((prev) =>
-        prev.map((node) => {
-          if (node.id === nodeId) {
-            const systemInfo = buildNodeSystemInfo(
-              messageData,
-              node.systemInfo,
-            );
-
-            if (!systemInfo) {
-              return node;
+            if (progress?.data) {
+              progressUpdates[nodeId] = {
+                stage: progress.data.stage || "",
+                percent: progress.data.percent || 0,
+                message: progress.message || "",
+              };
             }
-
-            return {
-              ...node,
-              connectionStatus: "online",
-              systemInfo,
-            };
+          } catch {
+            // A malformed update must not discard the rest of the delivery.
           }
-
-          return node;
-        }),
-      );
-    } else if (type === "upgrade_progress") {
-      try {
-        const progressData =
-          typeof messageData === "string"
-            ? JSON.parse(messageData)
-            : messageData;
-
-        if (progressData?.data) {
-          setUpgradeProgress((prev) => ({
-            ...prev,
-            [nodeId]: {
-              stage: progressData.data.stage || "",
-              percent: progressData.data.percent || 0,
-              message: progressData.message || "",
-            },
-          }));
         }
-      } catch {
-        // ignore parse errors
       }
-    } else if (type === "metric") {
-      clearOfflineTimer(nodeId);
-      setNodeList((prev) =>
-        prev.map((node) => {
-          if (node.id !== nodeId) return node;
+      setNodeList((prev) => applyNodeRealtimeBatch(prev, messages));
+      if (Object.keys(progressUpdates).length > 0) {
+        setUpgradeProgress((prev) => ({ ...prev, ...progressUpdates }));
+      }
+    },
+    [clearOfflineTimer, scheduleNodeOffline],
+  );
 
-          const metric =
-            typeof messageData === "string"
-              ? JSON.parse(messageData)
-              : messageData;
-
-          if (!metric || typeof metric !== "object") return node;
-
-          const incomingUptime = metric.uptime ?? 0;
-
-          return {
-            ...node,
-            connectionStatus: "online",
-            systemInfo: {
-              cpuUsage: metric.cpuUsage ?? metric.cpu_usage ?? 0,
-              memoryUsage: metric.memoryUsage ?? metric.memory_usage ?? 0,
-              uploadTraffic:
-                metric.netOutBytes ?? metric.bytes_transmitted ?? 0,
-              downloadTraffic: metric.netInBytes ?? metric.bytes_received ?? 0,
-              uploadSpeed: metric.netOutSpeed ?? metric.net_out_speed ?? 0,
-              downloadSpeed: metric.netInSpeed ?? metric.net_in_speed ?? 0,
-              uptime: incomingUptime || node.systemInfo?.uptime || 0,
-              diskUsage: metric.diskUsage ?? metric.disk_usage,
-              load1: metric.load1,
-              load5: metric.load5,
-              load15: metric.load15,
-              tcpConns: metric.tcpConns ?? metric.tcp_conns,
-              udpConns: metric.udpConns ?? metric.udp_conns,
-              netInSpeed: metric.netInSpeed ?? metric.net_in_speed,
-              netOutSpeed: metric.netOutSpeed ?? metric.net_out_speed,
-            },
-          };
-        }),
-      );
-    }
-  };
-
-  const { wsConnected, wsConnecting, usingPollingFallback } = useNodeRealtime({
-    onMessage: handleWebSocketMessage,
-  });
+  const { wsConnected, wsConnecting, wsStarting, usingPollingFallback } =
+    useNodeRealtime({ onMessages: handleWebSocketMessages, enabled: active });
 
   useEffect(() => {
+    if (!active) {
+      clearAllOfflineTimers();
+
+      return;
+    }
     // With cached data on screen, reload without the loading state.
     loadNodes({ silent: pageCached(PAGE) });
     loadRemoteUsage();
-  }, [loadNodes, loadRemoteUsage]);
+  }, [active, clearAllOfflineTimers, loadNodes, loadRemoteUsage]);
 
   useEffect(() => {
     setSelectedIds(new Set());
@@ -518,59 +469,10 @@ export default function NodePage({
   // Metrics arrive over WebSocket, but cached latency is only in node/list.
   useVisiblePolling(
     useCallback(() => loadNodes({ silent: true }), [loadNodes]),
+    5000,
+    active,
   );
 
-  // 格式化开机时间
-  const formatUptime = (seconds: number): string => {
-    if (seconds === 0) return "-";
-
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-
-    if (days > 0) {
-      return `${days}天${hours}小时`;
-    } else if (hours > 0) {
-      return `${hours}小时${minutes}分钟`;
-    } else {
-      return `${minutes}分钟`;
-    }
-  };
-
-  // 格式化流量
-
-  const formatFlow = (bytes: number): string => {
-    return formatTraffic(bytes);
-  };
-
-  const formatChainType = (chainType: number, hopInx: number) => {
-    if (chainType === 1) {
-      return "入口服务器";
-    }
-    if (chainType === 2) {
-      return `中继跳点 #${hopInx}`;
-    }
-    if (chainType === 3) {
-      return "出口服务器";
-    }
-
-    return "未知链路";
-  };
-
-  // IPv4/IPv6 格式验证（仅用于判定地址族）
-  const ipv4Regex =
-    /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-  const ipv6Regex =
-    /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$/;
-
-  const validateIpv4Literal = (ip: string): boolean =>
-    ipv4Regex.test(ip.trim());
-  const validateIpv6Literal = (ip: string): boolean =>
-    ipv6Regex.test(ip.trim());
-
-  // Hostname/domain validation (no scheme/port)
-  const hostnameRegex =
-    /^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(?:\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))*$/;
   const validateHostname = (host: string): boolean => {
     const v = host.trim();
 
@@ -730,7 +632,7 @@ export default function NodePage({
   }, [addRequest]);
 
   // 编辑节点
-  const handleEdit = (node: Node) => {
+  const handleEdit = useCallback((node: Node) => {
     setDialogTitle("编辑服务器");
     setIsEdit(true);
 
@@ -781,23 +683,39 @@ export default function NodePage({
           : "",
     );
     setDialogVisible(true);
+  }, []);
+
+  const showDeleteWarnings = (warnings?: string[]) => {
+    if (warnings?.length) {
+      toast(warnings.join("\n"), { icon: "⚠️", duration: 10000 });
+    }
   };
 
   // 删除节点
-  const handleDelete = (node: Node) => {
+  const handleDelete = useCallback((node: Node) => {
     setNodeToDelete(node);
     setDeleteModalOpen(true);
-  };
+  }, []);
 
-  const confirmDelete = async () => {
+  const confirmDelete = async (uninstall: boolean) => {
     if (!nodeToDelete) return;
 
     setDeleteLoading(true);
     try {
-      const res = await deleteNode(nodeToDelete.id);
+      const res = await deleteNode(nodeToDelete.id, uninstall);
 
       if (res.code === 0) {
-        toast.success("删除成功");
+        if (res.data?.uninstall === "done") {
+          toast.success("已删除，服务器上的 agent 正在卸载");
+        } else if (res.data?.uninstall === "pending") {
+          toast.success(
+            "已删除。服务器当前离线，agent 会在下次连接面板时自动卸载",
+            { duration: 6000 },
+          );
+        } else {
+          toast.success("删除成功");
+        }
+        showDeleteWarnings(res.data?.warnings);
         setNodeList((prev) => prev.filter((n) => n.id !== nodeToDelete.id));
         setDeleteModalOpen(false);
         setNodeToDelete(null);
@@ -811,7 +729,7 @@ export default function NodePage({
     }
   };
 
-  const handleDismissExpiryReminder = async (nodeId: number) => {
+  const handleDismissExpiryReminder = useCallback(async (nodeId: number) => {
     try {
       const res = await dismissNodeExpiryReminder(nodeId);
 
@@ -827,45 +745,44 @@ export default function NodePage({
     } catch {
       toast.error("网络错误，请重试");
     }
-  };
+  }, []);
 
   // Only the stable channel is published, so there is nothing to choose.
-  const openInstallSelector = (node: Node) =>
-    handleCopyInstallCommand(node, "stable");
 
   // 复制安装命令
-  const handleCopyInstallCommand = async (
-    node: Node,
-    channel: ReleaseChannel,
-  ) => {
-    setNodeList((prev) =>
-      prev.map((n) => (n.id === node.id ? { ...n, copyLoading: true } : n)),
-    );
-
-    try {
-      const [res, dockerRes] = await Promise.all([
-        getNodeInstallCommand(node.id, channel),
-        getNodeInstallCommand(node.id, channel, "docker").catch(() => null),
-      ]);
-
-      if (res.code === 0 && res.data) {
-        setInstallCommands({
-          script: res.data,
-          docker: dockerRes?.code === 0 ? dockerRes.data || "" : "",
-        });
-        setCurrentNodeName(node.name);
-        setInstallCommandModal(true);
-      } else {
-        toast.error(res.msg || "获取安装命令失败");
-      }
-    } catch {
-      toast.error("获取安装命令失败");
-    } finally {
+  const handleCopyInstallCommand = useCallback(
+    async (node: Node, channel: ReleaseChannel) => {
       setNodeList((prev) =>
-        prev.map((n) => (n.id === node.id ? { ...n, copyLoading: false } : n)),
+        prev.map((n) => (n.id === node.id ? { ...n, copyLoading: true } : n)),
       );
-    }
-  };
+
+      try {
+        const res = await getNodeInstallCommands(node.id, channel);
+
+        if (res.code === 0 && res.data) {
+          setInstallCommands(res.data);
+          setCurrentNodeName(node.name);
+          setInstallCommandModal(true);
+        } else {
+          toast.error(res.msg || "获取安装命令失败");
+        }
+      } catch {
+        toast.error("获取安装命令失败");
+      } finally {
+        setNodeList((prev) =>
+          prev.map((n) =>
+            n.id === node.id ? { ...n, copyLoading: false } : n,
+          ),
+        );
+      }
+    },
+    [],
+  );
+
+  const openInstallSelector = useCallback(
+    (node: Node) => handleCopyInstallCommand(node, "stable"),
+    [handleCopyInstallCommand],
+  );
 
   const handleCopyCommand = async (command: string) => {
     if (await copyWithToast(command, "安装命令已复制到剪贴板")) {
@@ -891,19 +808,19 @@ export default function NodePage({
   }, []);
 
   // 打开版本选择弹窗
-  const openUpgradeModal = async (
-    target: "single" | "batch",
-    nodeId?: number,
-  ) => {
-    const defaultChannel: ReleaseChannel = "stable";
+  const openUpgradeModal = useCallback(
+    async (target: "single" | "batch", nodeId?: number) => {
+      const defaultChannel: ReleaseChannel = "stable";
 
-    setUpgradeTarget(target);
-    setUpgradeTargetNodeId(nodeId || null);
-    setReleaseChannel(defaultChannel);
-    setSelectedVersion("");
-    setUpgradeModalOpen(true);
-    await loadReleasesByChannel(defaultChannel);
-  };
+      setUpgradeTarget(target);
+      setUpgradeTargetNodeId(nodeId || null);
+      setReleaseChannel(defaultChannel);
+      setSelectedVersion("");
+      setUpgradeModalOpen(true);
+      await loadReleasesByChannel(defaultChannel);
+    },
+    [loadReleasesByChannel],
+  );
 
   // 确认升级（从版本弹窗）
   const handleConfirmUpgrade = async () => {
@@ -980,10 +897,10 @@ export default function NodePage({
   };
 
   // 回退节点
-  const handleRollbackNode = (node: Node) => {
+  const handleRollbackNode = useCallback((node: Node) => {
     setNodeToRollback(node);
     setRollbackModalOpen(true);
-  };
+  }, []);
 
   const confirmRollback = async () => {
     if (!nodeToRollback) return;
@@ -1141,7 +1058,7 @@ export default function NodePage({
 
   // 处理拖拽结束
   // Probes one node's latency again and patches its result in place.
-  const probeNode = async (id: number) => {
+  const probeNode = useCallback(async (id: number) => {
     setProbingIds((prev) => new Set(prev).add(id));
     try {
       const res = await probeNodeLatency([id]);
@@ -1168,37 +1085,7 @@ export default function NodePage({
         return next;
       });
     }
-  };
-
-  const renderLatency = (node: Node, variant: "card" | "list") =>
-    node.isRemote !== 1 && node.connectionStatus === "online" ? (
-      node.latencyTargets?.points.length === 0 ? (
-        <button
-          className="rounded-full bg-default-100 px-2 py-0.5 text-xs text-default-500 hover:text-default-700"
-          title="这台服务器没选测试点，点此设置"
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setTargetNodes([node]);
-          }}
-        >
-          不测延迟
-        </button>
-      ) : probePoints(node.latency).length === 0 ? null : (
-        // Nothing until the first round (every 3 minutes) has a result;
-        // re-probing is in the result's menu.
-        <LatencyCell
-          note={node.latencyTargets ? "自定义" : undefined}
-          probe={node.latency}
-          probing={probingIds.has(node.id)}
-          variant={variant}
-          onEditTargets={() => setTargetNodes([node])}
-          onProbe={() => probeNode(node.id)}
-          onShowRoute={() => setRouteNode(node)}
-          onShowTrend={() => setTrendNode(node)}
-        />
-      )
-    ) : null;
+  }, []);
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
@@ -1269,7 +1156,7 @@ export default function NodePage({
     });
   };
 
-  const toggleSelect = (id: number) => {
+  const toggleSelect = useCallback((id: number) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
 
@@ -1281,7 +1168,7 @@ export default function NodePage({
 
       return next;
     });
-  };
+  }, []);
 
   const selectAll = () => {
     setSelectedIds(new Set(displayNodes.map((n) => n.id)));
@@ -1291,14 +1178,22 @@ export default function NodePage({
     setSelectedIds(new Set());
   };
 
-  const handleBatchDelete = async () => {
+  const handleBatchDelete = async (uninstall: boolean) => {
     if (selectedIds.size === 0) return;
     setBatchLoading(true);
     try {
-      const res = await batchDeleteNodes(Array.from(selectedIds));
+      const res = await batchDeleteNodes(Array.from(selectedIds), uninstall);
 
       if (res.code === 0) {
-        toast.success(`成功删除 ${selectedIds.size} 个服务器`);
+        const r = res.data;
+        const parts = [`已删除 ${r?.deleted ?? selectedIds.size} 个服务器`];
+
+        if (r?.uninstalled) parts.push(`${r.uninstalled} 个正在卸载 agent`);
+        if (r?.pending)
+          parts.push(`${r.pending} 个离线，将在下次连接面板时卸载`);
+        toast.success(parts.join("，"), { duration: 6000 });
+        if (r?.failed) toast.error(`${r.failed} 个服务器删除失败`);
+        showDeleteWarnings(r?.warnings);
         setNodeList((prev) => prev.filter((n) => !selectedIds.has(n.id)));
         setSelectedIds(new Set());
         setBatchDeleteModalOpen(false);
@@ -1313,22 +1208,10 @@ export default function NodePage({
     }
   };
 
-  // 传感器配置
   const sensors = useSensors(
-    useSensor(MouseSensor, {
-      activationConstraint: {
-        distance: 8,
-      },
-    }),
-    useSensor(TouchSensor, {
-      activationConstraint: {
-        delay: 250,
-        tolerance: 8,
-      },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    }),
+    useSensor(MouseSensor, MOUSE_SENSOR_OPTIONS),
+    useSensor(TouchSensor, TOUCH_SENSOR_OPTIONS),
+    useSensor(KeyboardSensor, KEYBOARD_SENSOR_OPTIONS),
   );
 
   const nodeExpiryStats = useMemo(() => {
@@ -1475,6 +1358,42 @@ export default function NodePage({
     [displayNodes],
   );
 
+  const wide = useWideNodeLayout();
+  const rowActions = useMemo(
+    () => ({
+      toggleSelect,
+      handleDismissExpiryReminder,
+      onOpenMonitor,
+      openInstallSelector,
+      openUpgradeModal,
+      handleRollbackNode,
+      handleEdit,
+      handleDelete,
+      probeNode,
+      setTargetNodes,
+      setTuneNode,
+      setSheetNodeId,
+      setRouteNode,
+      setTrendNode,
+    }),
+    [
+      toggleSelect,
+      handleDismissExpiryReminder,
+      onOpenMonitor,
+      openInstallSelector,
+      openUpgradeModal,
+      handleRollbackNode,
+      handleEdit,
+      handleDelete,
+      probeNode,
+      setTargetNodes,
+      setTuneNode,
+      setSheetNodeId,
+      setRouteNode,
+      setTrendNode,
+    ],
+  );
+
   return (
     <PageShell embedded={embedded}>
       {!embedded && (
@@ -1570,7 +1489,8 @@ export default function NodePage({
         </PageToolbar>
       )}
 
-      {!wsConnected && (
+      {/* A connection that comes up within a moment needs no notice. */}
+      {!wsConnected && !wsStarting && (
         <Alert
           className="mb-3"
           color="warning"
@@ -1608,139 +1528,27 @@ export default function NodePage({
             items={sortableNodeIds}
             strategy={rectSortingStrategy}
           >
-            <div className={CARD_GRID}>
-              {displayNodes.map((node) => {
-                const remote = node.isRemote === 1;
-                const online = node.connectionStatus === "online";
-                const expiry = getNodeExpiryMeta(
-                  node.expiryTime,
-                  node.renewalCycle,
-                );
-                const progress = upgradeProgress[node.id];
-                const openDetail = () =>
-                  remote || !onOpenMonitor
-                    ? setSheetNodeId(node.id)
-                    : onOpenMonitor(node.id);
-                const actions: NodeCardAction[] = [
-                  {
-                    key: "detail",
-                    label: "查看详情",
-                    icon: <Activity className="h-4 w-4" />,
-                    onPress: openDetail,
-                  },
-                  ...(!remote
-                    ? [
-                        {
-                          key: "edit",
-                          label: "编辑节点",
-                          icon: <Pencil className="h-4 w-4" />,
-                          onPress: () => handleEdit(node),
-                        },
-                        {
-                          key: "install",
-                          label: node.copyLoading
-                            ? "正在获取安装命令…"
-                            : "安装命令",
-                          icon: <Download className="h-4 w-4" />,
-                          disabled: node.copyLoading,
-                          onPress: () => openInstallSelector(node),
-                        },
-                        {
-                          key: "targets",
-                          label: "测试点设置",
-                          icon: <ListChecks className="h-4 w-4" />,
-                          onPress: () => setTargetNodes([node]),
-                        },
-                        {
-                          key: "upgrade",
-                          label: node.upgradeLoading
-                            ? "正在升级…"
-                            : "升级 Agent",
-                          icon: <ArrowUpCircle className="h-4 w-4" />,
-                          disabled: !online || node.upgradeLoading,
-                          onPress: () => openUpgradeModal("single", node.id),
-                        },
-                        {
-                          key: "rollback",
-                          label: node.rollbackLoading
-                            ? "正在回退…"
-                            : "回退版本",
-                          icon: <RotateCcw className="h-4 w-4" />,
-                          disabled: !online || node.rollbackLoading,
-                          onPress: () => handleRollbackNode(node),
-                        },
-                        {
-                          key: "tune",
-                          label: "系统调优",
-                          icon: <Gauge className="h-4 w-4" />,
-                          disabled: !online,
-                          onPress: () => setTuneNode(node),
-                        },
-                        ...(expiry.isHighlighted &&
-                        !node.expiryReminderDismissed
-                          ? [
-                              {
-                                key: "dismiss",
-                                label: "关闭到期提醒",
-                                icon: <BellOff className="h-4 w-4" />,
-                                onPress: () =>
-                                  handleDismissExpiryReminder(node.id),
-                              },
-                            ]
-                          : []),
-                      ]
-                    : []),
-                  {
-                    key: "delete",
-                    label: "删除节点",
-                    icon: <Trash2 className="h-4 w-4" />,
-                    danger: true,
-                    onPress: () => handleDelete(node),
-                  },
-                ];
-
-                return (
-                  <SortableItem key={node.id} id={node.id}>
-                    {(listeners, attributes) => (
-                      <NodeStatusCard
-                        actions={actions}
-                        dragHandle={
-                          <button
-                            {...attributes}
-                            {...listeners}
-                            aria-label={`拖拽排序 ${node.name}`}
-                            className="flex h-7 w-5 cursor-grab items-center justify-center text-default-400 opacity-40 transition-opacity hover:text-foreground active:cursor-grabbing group-hover:opacity-100 focus-visible:opacity-100"
-                            style={{ touchAction: "none" }}
-                            type="button"
-                          >
-                            <GripVertical className="h-3.5 w-3.5" />
-                          </button>
-                        }
-                        latency={renderLatency(node, "card")}
-                        month={monthTraffic[String(node.id)]}
-                        node={node}
-                        progress={
-                          progress && progress.percent < 100 ? (
-                            <Progress
-                              showValueLabel
-                              aria-label="升级进度"
-                              color="warning"
-                              label={progress.message}
-                              size="sm"
-                              value={progress.percent}
-                            />
-                          ) : undefined
-                        }
-                        selectMode={selectMode}
-                        selected={selectedIds.has(node.id)}
-                        usage={remoteUsageMap[node.id]}
-                        onOpen={openDetail}
-                        onSelect={() => toggleSelect(node.id)}
-                      />
-                    )}
-                  </SortableItem>
-                );
-              })}
+            <div
+              className={
+                card ? CARD_GRID : "grid grid-cols-1 gap-2 2xl:grid-cols-2"
+              }
+            >
+              {displayNodes.map((node) => (
+                <NodeRow
+                  key={node.id}
+                  actions={rowActions}
+                  card={card}
+                  isDisplayFiltered={isDisplayFiltered}
+                  month={monthTraffic[String(node.id)]}
+                  node={node}
+                  probing={probingIds.has(node.id)}
+                  progress={upgradeProgress[node.id]}
+                  selectMode={selectMode}
+                  selected={selectedIds.has(node.id)}
+                  usage={remoteUsageMap[node.id]}
+                  wide={wide}
+                />
+              ))}
             </div>
           </SortableContext>
         </DndContext>

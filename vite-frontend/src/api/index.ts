@@ -156,7 +156,8 @@ export const getAllUsers = (pageData: UserListQuery = {}) =>
   Network.post<UserApiItem[]>("/user/list", pageData);
 export const updateUser = (data: UserMutationPayload) =>
   Network.post("/user/update", data);
-export const deleteUser = (id: number) => Network.post("/user/delete", { id });
+export const deleteUser = (id: number) =>
+  Network.post<{ warnings?: string[] }>("/user/delete", { id });
 export const getUserPackageInfo = () =>
   Network.post<UserPackageInfoApiData>("/user/package");
 
@@ -173,12 +174,39 @@ export const getDashboardNodeExpiryList = () =>
   Network.post<NodeApiItem[]>("/node/list", {});
 export const updateNode = (data: NodeMutationPayload) =>
   Network.post("/node/update", data);
-export const deleteNode = (id: number) => Network.post("/node/delete", { id });
-export const getNodeInstallCommand = (
+/** Outcome of uninstalling the agent while deleting a server. */
+export type NodeUninstallOutcome = "done" | "pending" | "unsupported";
+export interface NodeDeleteResult {
+  uninstall?: NodeUninstallOutcome;
+  warnings?: string[];
+}
+export interface NodeBatchDeleteResult {
+  deleted: number;
+  failed: number;
+  uninstalled: number;
+  pending: number;
+  unsupported: number;
+  warnings?: string[];
+}
+/** `uninstall` also removes the agent and what it installed on the server. */
+export const deleteNode = (id: number, uninstall = false) =>
+  Network.post<NodeDeleteResult>("/node/delete", { id, uninstall });
+export interface NodeInstallCommands {
+  script: string;
+  docker: string;
+  dockerPrivileged: string;
+  dockerCompose: string;
+  dockerComposePrivileged: string;
+}
+export const getNodeInstallCommands = (
   id: number,
   channel: ReleaseChannel = "stable",
-  mode: "script" | "docker" = "script",
-) => Network.post<string>("/node/install", { id, channel, mode });
+) =>
+  Network.post<NodeInstallCommands>("/node/install", {
+    id,
+    channel,
+    mode: "all",
+  });
 export const updateNodeOrder = (data: {
   nodes: Array<{ id: number; inx: number }>;
 }) => Network.post("/node/update-order", data);
@@ -529,8 +557,8 @@ export const batchResumeForwards = (ids: number[]) =>
   Network.post<BatchOperationResult>("/forward/batch-resume", { ids });
 export const batchDeleteTunnels = (ids: number[]) =>
   Network.post<BatchOperationResult>("/tunnel/batch-delete", { ids });
-export const batchDeleteNodes = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/node/batch-delete", { ids });
+export const batchDeleteNodes = (ids: number[], uninstall = false) =>
+  Network.post<NodeBatchDeleteResult>("/node/batch-delete", { ids, uninstall });
 export const batchRedeployForwards = (ids: number[]) =>
   Network.post<BatchOperationResult>("/forward/batch-redeploy", { ids });
 export const batchRedeployTunnels = (ids: number[]) =>
@@ -1100,6 +1128,8 @@ export const resetMySubscription = (id: number) =>
 export type SubTrafficRange = "hour" | "day" | "month";
 /** A subscription's traffic: 24 hours, 30 days or 12 months in the viewer's time zone. */
 export interface SubTraffic {
+  /** Coarse history crossed a local time boundary. */
+  estimated?: boolean;
   range: SubTrafficRange;
   /** Each bucket's start (unix ms) and bytes. */
   points: Array<{ time: number; up: number; down: number }>;
@@ -1330,11 +1360,18 @@ export const resetInboundTraffic = (id: number) =>
   Network.post("/inbound/reset-traffic", { id });
 export const regenerateInbound = (id: number) =>
   Network.post("/inbound/regenerate", { id });
-export const importInbounds = (links: string, relayOnly: boolean) =>
+export const importInbounds = (
+  links: string,
+  relayOnly: boolean,
+  tags: string[] = [],
+) =>
   Network.post<{ created: number[]; errors: string[] }>("/inbound/import", {
     links,
     relayOnly,
+    tags,
   });
+export const setInboundTags = (ids: number[], tags: string[]) =>
+  Network.post("/inbound/tags", { ids, tags });
 export const updateExternalInbound = (data: {
   id: number;
   name: string;

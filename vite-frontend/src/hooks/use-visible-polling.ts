@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 export function useVisiblePolling(
   refresh: () => Promise<void>,
   interval = 5000,
+  enabled = true,
 ) {
   const refreshRef = useRef(refresh);
 
@@ -12,6 +13,7 @@ export function useVisiblePolling(
   }, [refresh]);
 
   useEffect(() => {
+    if (!enabled) return;
     let stopped = false;
     let running = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -48,5 +50,5 @@ export function useVisiblePolling(
       window.removeEventListener("focus", resume);
       window.removeEventListener("online", resume);
     };
-  }, [interval]);
+  }, [interval, enabled]);
 }

@@ -6,6 +6,7 @@ import (
 	"go-backend/internal/store/model"
 	"sort"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -73,7 +74,7 @@ func (r *Repository) GetFlowUploadForwardMetas(forwardIDs []int64) (map[int64]Fl
 	for _, chunk := range chunkFlowUploadForwardIDs(ids) {
 		var rows []row
 		err := r.db.Table("forward AS f").
-			Select("f.id AS forward_id, f.user_id AS user_id, COALESCE(ut.id, 0) AS user_tunnel_id, f.tunnel_id AS tunnel_id, t.traffic_ratio AS traffic_ratio, t.flow AS tunnel_flow").
+			Select("f.id AS forward_id, f.user_id AS user_id, COALESCE(ut.id, 0) AS user_tunnel_id, f.tunnel_id AS tunnel_id, COALESCE(t.traffic_ratio, 1) AS traffic_ratio, COALESCE(t.flow, 1) AS tunnel_flow").
 			Joins("LEFT JOIN tunnel t ON t.id = f.tunnel_id").
 			Joins("LEFT JOIN user_tunnel ut ON ut.user_id = f.user_id AND ut.tunnel_id = f.tunnel_id").
 			Where("f.id IN ?", chunk).
@@ -82,12 +83,6 @@ func (r *Repository) GetFlowUploadForwardMetas(forwardIDs []int64) (map[int64]Fl
 			return nil, err
 		}
 		for _, row := range rows {
-			if row.TunnelFlow <= 0 {
-				row.TunnelFlow = 1
-			}
-			if row.TrafficRatio <= 0 {
-				row.TrafficRatio = 1
-			}
 			out[row.ForwardID] = FlowUploadForwardMeta{
 				ForwardID:    row.ForwardID,
 				UserID:       row.UserID,
@@ -426,6 +421,10 @@ func sortedFlowUploadTargetIDs(totals map[int64][2]int64) []int64 {
 }
 
 func (r *Repository) ApplyFlowUploadDeltasBatch(deltas []FlowUploadCounterDelta) error {
+	return r.ApplyFlowUploadDeltasBatchAt(deltas, time.Now())
+}
+
+func (r *Repository) ApplyFlowUploadDeltasBatchAt(deltas []FlowUploadCounterDelta, now time.Time) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
@@ -434,11 +433,11 @@ func (r *Repository) ApplyFlowUploadDeltasBatch(deltas []FlowUploadCounterDelta)
 	}
 
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		return applyFlowUploadDeltasTx(tx, deltas)
+		return applyFlowUploadDeltasTx(tx, deltas, now)
 	})
 }
 
-func applyFlowUploadDeltasTx(tx *gorm.DB, deltas []FlowUploadCounterDelta) error {
+func applyFlowUploadDeltasTx(tx *gorm.DB, deltas []FlowUploadCounterDelta, now time.Time) error {
 	if tx == nil {
 		return errors.New("database unavailable")
 	}
@@ -468,6 +467,15 @@ func applyFlowUploadDeltasTx(tx *gorm.DB, deltas []FlowUploadCounterDelta) error
 			current[1] += delta.OutFlow
 			userTunnelTotals[delta.UserTunnelID] = current
 		}
+	}
+
+	// Roll the cycle before adding a new upload, including when the scheduled
+	// job was missed. The row locks and increments share this transaction.
+	if err := rollMonthlyFlowTx(tx, "user", sortedFlowUploadTargetIDs(userTotals), now); err != nil {
+		return err
+	}
+	if err := rollMonthlyFlowTx(tx, "user_tunnel", sortedFlowUploadTargetIDs(userTunnelTotals), now); err != nil {
+		return err
 	}
 
 	for _, forwardID := range sortedFlowUploadTargetIDs(forwardTotals) {

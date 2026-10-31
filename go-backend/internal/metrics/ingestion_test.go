@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -346,18 +347,34 @@ func TestZeroValues(t *testing.T) {
 
 // Counter regression without evidence of a reboot only establishes a new baseline.
 func TestNodeTrafficFromCounters(t *testing.T) {
-	s := NewIngestionService(nil)
+	r, err := repo.Open(filepath.Join(t.TempDir(), "traffic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	s := NewIngestionService(r)
 	s.RecordNodeMetric(7, SystemInfo{BytesReceived: 1000, BytesTransmitted: 500})
 	s.RecordNodeMetric(7, SystemInfo{BytesReceived: 1600, BytesTransmitted: 900})
 	s.RecordNodeMetric(7, SystemInfo{BytesReceived: 100, BytesTransmitted: 50})
-	var in, out int64
-	for k, v := range s.traffic {
-		if k.node == 7 {
-			in += v[0]
-			out += v[1]
-		}
+	s.flushNodeMetrics()
+	totals, err := r.NodeTrafficSince(0)
+	if err != nil {
+		t.Fatal(err)
 	}
+	in, out := totals[7][0], totals[7][1]
 	if in != 600 || out != 400 {
 		t.Fatalf("traffic in=%d out=%d", in, out)
+	}
+	var rows []model.NodeTraffic
+	if err := r.DB().Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("no traffic buckets persisted")
+	}
+	for _, row := range rows {
+		if row.BucketMinutes != 15 || row.Hour%int64(15*time.Minute/time.Millisecond) != 0 {
+			t.Fatalf("not a 15-minute bucket: %+v", row)
+		}
 	}
 }

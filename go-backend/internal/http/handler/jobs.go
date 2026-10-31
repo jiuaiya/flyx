@@ -24,11 +24,12 @@ func (h *Handler) StartBackgroundJobs() {
 	h.jobsStarted = true
 	queue := newNodeReconnectProbeQueue()
 	h.reconnectProbes = queue
-	h.jobsWG.Add(16)
+	h.jobsWG.Add(17)
 	h.jobsMu.Unlock()
 
 	go h.runHourlyStatsLoop(ctx)
 	go h.runDailyMaintenanceLoop(ctx)
+	go h.runQuotaControlLoop(ctx)
 	go h.runNodeRenewalCycleLoop(ctx)
 	go h.runMetricsIngestion(ctx)
 	go h.runHealthChecks(ctx)
@@ -203,17 +204,19 @@ func (h *Handler) runHourlyStatsLoop(ctx context.Context) {
 func (h *Handler) runDailyMaintenanceLoop(ctx context.Context) {
 	defer h.jobsWG.Done()
 
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
 	for {
-		wait := durationUntilNextDailyMaintenance(time.Now())
-		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
 			return
-		case <-timer.C:
-			h.runResetAndExpiryJob(time.Now())
+		default:
+		}
+		h.runResetAndExpiryJob(time.Now())
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }
@@ -238,7 +241,6 @@ func (h *Handler) runStatisticsFlowJob(now time.Time) {
 
 	nowMs := now.UnixMilli()
 	cutoffMs := nowMs - int64((48*time.Hour)/time.Millisecond)
-	_ = h.repo.PurgeOldStatisticsFlows(cutoffMs)
 	_ = h.repo.PurgeSubscriptionTraffic(now.Add(-subTrafficRetention).UnixMilli())
 
 	hourMark := now.Truncate(time.Hour)
@@ -250,19 +252,35 @@ func (h *Handler) runStatisticsFlowJob(now time.Time) {
 		return
 	}
 
+	allSaved := true
 	for _, user := range users {
 		currentTotal := user.InFlow + user.OutFlow
 		increment := currentTotal
 
 		lastTotal, err := h.repo.GetLastStatisticsFlowTotal(user.UserID)
-		if err == nil && lastTotal.Valid {
+		if err != nil {
+			log.Printf("statistics flow baseline lookup failed user_id=%d err=%v", user.UserID, err)
+			allSaved = false
+			continue
+		}
+		if lastTotal.Valid {
 			increment = currentTotal - lastTotal.Int64
 			if increment < 0 {
 				increment = currentTotal
 			}
 		}
 
-		_ = h.repo.CreateStatisticsFlow(user.UserID, increment, currentTotal, hourText, createdTime)
+		if err := h.repo.CreateStatisticsFlow(user.UserID, increment, currentTotal, hourText, createdTime); err != nil {
+			log.Printf("statistics flow write failed user_id=%d err=%v", user.UserID, err)
+			allSaved = false
+		}
+	}
+	// Old rows may still be the only cumulative baseline after downtime. Do
+	// not remove them until every user has a successfully saved replacement.
+	if allSaved {
+		if err := h.repo.PurgeOldStatisticsFlows(cutoffMs); err != nil {
+			log.Printf("statistics flow cleanup failed err=%v", err)
+		}
 	}
 }
 
@@ -272,17 +290,14 @@ func (h *Handler) runResetAndExpiryJob(now time.Time) {
 	}
 
 	h.resetMonthlyFlow(now)
-	h.resetUserQuotaWindows(now)
 	h.disableExpiredUsers(now.UnixMilli())
 	h.disableExpiredUserTunnels(now.UnixMilli())
 }
 
 func (h *Handler) resetMonthlyFlow(now time.Time) {
-	currentDay := now.Day()
-	lastDay := time.Date(now.Year(), now.Month()+1, 0, 0, 0, 0, 0, now.Location()).Day()
-
-	_ = h.repo.ResetUserMonthlyFlow(currentDay, lastDay)
-	_ = h.repo.ResetUserTunnelMonthlyFlow(currentDay, lastDay)
+	if err := h.repo.RollMonthlyFlows(now); err != nil {
+		log.Printf("monthly flow reset failed: %v", err)
+	}
 }
 
 func (h *Handler) disableExpiredUsers(nowMs int64) {
@@ -349,4 +364,23 @@ func (h *Handler) runNodeRenewalCycleJob(now time.Time) {
 	}
 
 	_ = advanced
+}
+
+func (h *Handler) runQuotaControlLoop(ctx context.Context) {
+	defer h.jobsWG.Done()
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		h.resetUserQuotaWindows(time.Now())
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }

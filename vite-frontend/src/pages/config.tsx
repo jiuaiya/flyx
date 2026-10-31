@@ -222,7 +222,7 @@ const CONFIG_ITEMS: ConfigItem[] = [
     key: "admin_password_login_disabled",
     label: "禁止管理员使用密码登录",
     description:
-      "管理员账号只能用 GitHub 或通行证密钥登录，普通用户照常用密码登录。需所有管理员先绑定 GitHub。被锁在外面时，在服务器执行 docker exec flux-panel-backend /app/paneld enable-password-login 恢复",
+      "管理员账号只能用 GitHub 或通行证密钥登录，普通用户照常用密码登录。需所有管理员先绑定 GitHub。被锁在外面时，在服务器执行 docker compose exec backend /app/paneld enable-password-login 恢复",
     type: "switch",
     dependsOn: "github_login_enabled",
     dependsValue: "true",
@@ -1788,6 +1788,12 @@ export default function ConfigPage() {
                 <dt className="text-default-500">最新版本</dt>
                 <dd>
                   {systemUpgradeInfo?.latestVersion || "未获取到可用版本"}
+                  {!systemUpgradeInfo?.latestVersion &&
+                    systemUpgradeInfo?.reason && (
+                      <p className="break-all text-xs text-default-500">
+                        {systemUpgradeInfo.reason}
+                      </p>
+                    )}
                 </dd>
                 <dt className="text-default-500">升级能力</dt>
                 <dd>

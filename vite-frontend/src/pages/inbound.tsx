@@ -11,6 +11,7 @@ import toast from "react-hot-toast";
 import { ChevronDown, Copy } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
+import { getStoredValue, setStoredValue } from "@/utils/identity-storage";
 import {
   batchDeleteInbounds,
   batchToggleInbounds,
@@ -54,12 +55,13 @@ import { type NodeHubState } from "@/pages/node-hub";
 import { RelayModal } from "@/pages/inbound/relay-modal";
 import { RemoteSourcesSection } from "@/pages/inbound/sources";
 import { ShareModal, copyText } from "@/pages/inbound/share";
+import { TagChips, TagsModal, collectTags } from "@/pages/inbound/tags";
 import {
   type InboundForm,
   KERNEL_LABELS,
-  KERNEL_STATUS,
   describeInbound,
   emptyForm,
+  kernelStatusText,
   formFromItem,
 } from "@/pages/inbound/presets";
 import { Button } from "@/shadcn-bridge/heroui/button";
@@ -83,13 +85,13 @@ type ConfirmAction = "delete" | "regenerate" | "reset";
 
 type PageTab = "inbounds" | "sources";
 
-const TAB_KEY = "flvx_inbound_tab";
+const TAB_KEY = "flyx_inbound_tab";
 
 /** Remembers the selected tab; a convenience only, so storage errors are ignored. */
 function usePageTab(): [PageTab, (t: PageTab) => void] {
   const [tab, setTabState] = useState<PageTab>(() => {
     try {
-      const v = localStorage.getItem(TAB_KEY);
+      const v = getStoredValue(localStorage, TAB_KEY);
 
       return v === "sources" ? v : "inbounds";
     } catch {
@@ -99,7 +101,7 @@ function usePageTab(): [PageTab, (t: PageTab) => void] {
   const setTab = useCallback((t: PageTab) => {
     setTabState(t);
     try {
-      localStorage.setItem(TAB_KEY, t);
+      setStoredValue(localStorage, TAB_KEY, t);
     } catch {
       // Ignored.
     }
@@ -239,6 +241,15 @@ export default function InboundPage() {
     "",
   );
   const [nodeFilter, setNodeFilter] = useState("");
+  const [tagFilter, setTagFilter] = useLocalStorageState(
+    "inbound-tag-filter",
+    "",
+  );
+  const [tagTarget, setTagTarget] = useState<{
+    ids: number[];
+    tags: string[];
+    title: string;
+  } | null>(null);
   const [tab, setTab] = usePageTab();
   const navigate = useNavigate();
   const [sheetFor, setSheetFor] = useState<number | null>(null);
@@ -359,19 +370,31 @@ export default function InboundPage() {
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1], "zh-CN"));
   }, [inbounds]);
 
+  const allTags = useMemo(() => collectTags(inbounds), [inbounds]);
+  // A remembered tag that no node carries any more filters nothing.
+  const activeTag = allTags.includes(tagFilter) ? tagFilter : "";
+
   const filtered = useMemo(() => {
     const kw = searchKeyword.trim().toLowerCase();
 
     return inbounds.filter(
       (i) =>
         (!nodeFilter || groupKeyOf(i) === nodeFilter) &&
+        (!activeTag || (i.tags ?? []).includes(activeTag)) &&
         (!kw ||
-          [i.name, i.nodeName, i.protocol, String(i.port), i.remark]
+          [
+            i.name,
+            i.nodeName,
+            i.protocol,
+            String(i.port),
+            i.remark,
+            ...(i.tags ?? []),
+          ]
             .join(" ")
             .toLowerCase()
             .includes(kw)),
     );
-  }, [inbounds, searchKeyword, nodeFilter]);
+  }, [inbounds, searchKeyword, nodeFilter, activeTag]);
 
   // Grouped by server, imported nodes last; one group shows as a flat list.
   const inboundGroups = groupItems(filtered, groupKeyOf, (_key, i) =>
@@ -387,6 +410,9 @@ export default function InboundPage() {
     );
     setFormOpen(true);
   };
+
+  const openTags = (item: InboundApiItem) =>
+    setTagTarget({ ids: [item.id], tags: item.tags ?? [], title: item.name });
 
   const openEdit = (item: InboundApiItem) => {
     setFormInitial(formFromItem(item));
@@ -631,6 +657,7 @@ export default function InboundPage() {
 
     const badges = (
       <>
+        <TagChips max={3} tags={item.tags} />
         {item.outboundIpStrategy && item.outboundIpStrategy !== "auto" && (
           <Chip
             className="shrink-0 whitespace-nowrap"
@@ -690,7 +717,7 @@ export default function InboundPage() {
         )}
         {kernelBad && (
           <Chip color="warning" size="sm" variant="flat">
-            内核{KERNEL_STATUS[item.kernelStatus]?.label ?? "异常"}
+            {kernelStatusText(item.kernelStatus)}
           </Chip>
         )}
       </>
@@ -843,7 +870,7 @@ export default function InboundPage() {
                   onPress: () => setSelectMode(true),
                 },
               ]}
-              placeholder="搜索名称、服务器、协议、端口"
+              placeholder="搜索名称、服务器、协议、端口、标签"
               primary={{
                 key: "create",
                 label: "新建入站",
@@ -867,6 +894,24 @@ export default function InboundPage() {
                     {nodeOptions.map(([id, name]) => (
                       <option key={id} value={id}>
                         {name}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-default-500" />
+                </div>
+              )}
+              {allTags.length > 0 && (
+                <div className="relative max-w-[8rem] shrink-0">
+                  <select
+                    aria-label="按标签筛选"
+                    className="h-9 w-full appearance-none truncate rounded-full bg-default-100 pl-3.5 pr-8 text-sm outline-none"
+                    value={activeTag}
+                    onChange={(e) => setTagFilter(e.target.value)}
+                  >
+                    <option value="">全部标签</option>
+                    {allTags.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
                       </option>
                     ))}
                   </select>
@@ -910,6 +955,28 @@ export default function InboundPage() {
                   停用
                 </Button>
                 <Button
+                  isDisabled={selectedIds.size === 0}
+                  size="sm"
+                  variant="flat"
+                  onPress={() => {
+                    const chosen = inbounds.filter((i) =>
+                      selectedIds.has(i.id),
+                    );
+                    // Start from the tags they all share.
+                    const shared = (chosen[0]?.tags ?? []).filter((t) =>
+                      chosen.every((i) => (i.tags ?? []).includes(t)),
+                    );
+
+                    setTagTarget({
+                      ids: chosen.map((i) => i.id),
+                      tags: shared,
+                      title: `已选 ${chosen.length} 个`,
+                    });
+                  }}
+                >
+                  标签
+                </Button>
+                <Button
                   color="danger"
                   isDisabled={selectedIds.size === 0}
                   size="sm"
@@ -936,7 +1003,7 @@ export default function InboundPage() {
                     ? "先在服务器上安装内核，然后在这里创建 VLESS-Reality、SS2022 等入站；也可以点“导入”，导入别处搭好的 ss 节点用来对接中转。"
                     : inbounds.length === 0
                       ? "点击“新建入站”，选择一个模板即可快速创建。"
-                      : "换个关键词或服务器试试。"}
+                      : "换个关键词、服务器或标签试试。"}
                 </p>
                 {kernels.length === 0 && inbounds.length === 0 && (
                   <Button
@@ -1023,6 +1090,11 @@ export default function InboundPage() {
                   onPress: () => setExternalEdit(sheetItem),
                 },
                 {
+                  key: "tags",
+                  label: "标签",
+                  onPress: () => openTags(sheetItem),
+                },
+                {
                   key: "delete",
                   label: "删除",
                   color: "danger" as const,
@@ -1065,6 +1137,11 @@ export default function InboundPage() {
                     onPress: () => openEdit(sheetItem),
                   },
                   {
+                    key: "tags",
+                    label: "标签",
+                    onPress: () => openTags(sheetItem),
+                  },
+                  {
                     key: "reset",
                     label: "重置流量",
                     onPress: () =>
@@ -1104,6 +1181,7 @@ export default function InboundPage() {
               <Chip color="primary" size="sm" variant="flat">
                 {describeInbound(sheetItem)}
               </Chip>
+              <TagChips tags={sheetItem.tags} />
               <Chip size="sm" variant="flat">
                 {sheetItem.external
                   ? "导入"
@@ -1155,12 +1233,20 @@ export default function InboundPage() {
       />
       <ImportModal
         isOpen={importOpen}
+        ssMethods={caps?.ssMethods ?? []}
+        tagSuggestions={allTags}
         onClose={() => setImportOpen(false)}
         onImported={() => loadData(false)}
         onSourceAdded={() => {
           setTab("sources");
           loadData(false);
         }}
+      />
+      <TagsModal
+        suggestions={allTags}
+        target={tagTarget}
+        onClose={() => setTagTarget(null)}
+        onSaved={() => loadData(false)}
       />
       <ExternalEditModal
         item={externalEdit}

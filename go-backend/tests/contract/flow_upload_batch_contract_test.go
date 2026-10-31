@@ -27,7 +27,7 @@ func TestFlowUploadAggregatesRepeatedItemsAndDisablesQuotaImmediately(t *testing
 	if err := repo.DB().Exec(`INSERT INTO user(id, user, pwd, role_id, exp_time, flow, in_flow, out_flow, flow_reset_time, num, created_time, updated_time, status) VALUES(2, 'flow_user', 'pwd', 1, 2727251700000, 99999, 0, 0, 1, 99999, ?, ?, 1)`, nowMs, nowMs).Error; err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
-	tunnel := &model.Tunnel{Name: "tunnel-1", TrafficRatio: 1.0, Type: 1, Protocol: "tls", Flow: 1, CreatedTime: nowMs, UpdatedTime: nowMs, Status: 1}
+	tunnel := &model.Tunnel{Name: "tunnel-1", TrafficRatio: 1.0, Type: 1, Protocol: "tls", Flow: 2, CreatedTime: nowMs, UpdatedTime: nowMs, Status: 1}
 	if err := repo.DB().Create(tunnel).Error; err != nil {
 		t.Fatalf("seed tunnel: %v", err)
 	}
@@ -59,8 +59,11 @@ func TestFlowUploadAggregatesRepeatedItemsAndDisablesQuotaImmediately(t *testing
 	if res.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", res.Code)
 	}
-	if got := mustQueryInt(t, repo, `SELECT status FROM forward WHERE id = 20`); got != 0 {
-		t.Fatalf("expected forward paused immediately, got status=%d", got)
+	if got := mustQueryInt(t, repo, `SELECT status FROM forward WHERE id = 20`); got != 1 {
+		t.Fatalf("offline node has not acknowledged pause, got status=%d", got)
+	}
+	if got := mustQueryString(t, repo, `SELECT paused_forward_ids FROM user_quota WHERE user_id = 2`); got != "20" {
+		t.Fatalf("pause intent not retained: %q", got)
 	}
 	if got := mustQueryInt(t, repo, `SELECT disabled_by_quota FROM user_quota WHERE user_id = 2`); got != 1 {
 		t.Fatalf("expected quota disabled flag=1, got %d", got)

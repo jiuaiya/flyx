@@ -342,6 +342,7 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 				Bytes:       s.Bytes,
 				UpdatedTime: now,
 			}
+			prev[key{s.InboundID, s.Protocol, s.Direction}] = row
 			if err := tx.Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "inbound_id"}, {Name: "protocol"}, {Name: "direction"}},
 				DoUpdates: clause.AssignmentColumns([]string{"epoch", "bytes", "updated_time"}),
@@ -494,6 +495,16 @@ func (r *Repository) TunnelExitNodeIDs(tunnelID int64) ([]int64, error) {
 		Where("tunnel_id = ? AND chain_type = ?", tunnelID, "3").
 		Pluck("node_id", &ids).Error
 	return ids, err
+}
+
+// SetNodeInboundTags replaces the tags of the given inbounds.
+func (r *Repository) SetNodeInboundTags(ids []int64, tags string, now int64) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.NodeInbound{}).Where("id IN ?", ids).
+		Updates(map[string]interface{}{"tags": tags, "updated_time": now})
+	return res.RowsAffected, res.Error
 }
 
 func (r *Repository) SetNodeInboundRelayOnly(id int64, relayOnly int) error {

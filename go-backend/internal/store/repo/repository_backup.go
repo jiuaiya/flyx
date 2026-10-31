@@ -17,7 +17,27 @@ import (
 
 // ─── Export Methods ──────────────────────────────────────────────────
 
+// Keep balances and receipts in the same database snapshot. In PostgreSQL a
+// plain READ COMMITTED transaction would still mix different snapshots.
+func (r *Repository) exportBackupSnapshot(read func(*Repository) (*model.BackupData, error)) (*model.BackupData, error) {
+	var backup *model.BackupData
+	opts := &sql.TxOptions{}
+	if r.db.Dialector.Name() == "postgres" {
+		opts.Isolation = sql.LevelRepeatableRead
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		backup, err = read(&Repository{db: tx, dbPath: r.dbPath})
+		return err
+	}, opts)
+	return backup, err
+}
+
 func (r *Repository) ExportAll() (*model.BackupData, error) {
+	return r.exportBackupSnapshot(func(tx *Repository) (*model.BackupData, error) { return tx.exportAll() })
+}
+
+func (r *Repository) exportAll() (*model.BackupData, error) {
 	backup := &model.BackupData{Version: "1.0", ExportedAt: unixMilliNow()}
 
 	users, err := r.exportUsers()
@@ -86,10 +106,17 @@ func (r *Repository) ExportAll() (*model.BackupData, error) {
 	}
 	backup.Inbounds = inbounds
 
+	if err := r.db.Where("scope LIKE ?", "flow:%").Find(&backup.FlowCursors).Error; err != nil {
+		return nil, err
+	}
 	return backup, nil
 }
 
 func (r *Repository) ExportPartial(types []string) (*model.BackupData, error) {
+	return r.exportBackupSnapshot(func(tx *Repository) (*model.BackupData, error) { return tx.exportPartial(types) })
+}
+
+func (r *Repository) exportPartial(types []string) (*model.BackupData, error) {
 	backup := &model.BackupData{Version: "1.0", ExportedAt: unixMilliNow()}
 	typeSet := make(map[string]bool)
 	for _, t := range types {
@@ -173,6 +200,11 @@ func (r *Repository) ExportPartial(types []string) (*model.BackupData, error) {
 		}
 		backup.Inbounds = v
 	}
+	if typeSet["users"] && typeSet["nodes"] && typeSet["forwards"] && typeSet["userTunnels"] {
+		if err := r.db.Where("scope LIKE ?", "flow:%").Find(&backup.FlowCursors).Error; err != nil {
+			return nil, err
+		}
+	}
 	return backup, nil
 }
 
@@ -194,7 +226,7 @@ func (r *Repository) exportUsers() ([]model.UserBackup, error) {
 		b := model.UserBackup{
 			ID: u.ID, User: u.User, Pwd: u.Pwd, RoleID: u.RoleID,
 			ExpTime: u.ExpTime, Flow: u.Flow, FlowMiB: u.FlowMiB, InFlow: u.InFlow, OutFlow: u.OutFlow,
-			FlowResetTime: u.FlowResetTime, Num: u.Num,
+			FlowResetTime: u.FlowResetTime, FlowResetAt: u.FlowResetAt, Num: u.Num,
 			CreatedTime: u.CreatedTime, Status: u.Status,
 		}
 		if quota := quotaMap[u.ID]; quota != nil {
@@ -373,7 +405,7 @@ func (r *Repository) exportUserTunnels() ([]model.UserTunnelBackup, error) {
 		b := model.UserTunnelBackup{
 			ID: ut.ID, UserID: ut.UserID, TunnelID: ut.TunnelID,
 			Num: ut.Num, Flow: ut.Flow, FlowMiB: ut.FlowMiB, InFlow: ut.InFlow, OutFlow: ut.OutFlow,
-			FlowResetTime: ut.FlowResetTime, ExpTime: ut.ExpTime, Status: ut.Status,
+			FlowResetTime: ut.FlowResetTime, FlowResetAt: ut.FlowResetAt, ExpTime: ut.ExpTime, Status: ut.Status,
 		}
 		if ut.SpeedID.Valid {
 			b.SpeedID = ut.SpeedID.Int64
@@ -554,6 +586,30 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			}
 			result.InboundsImported = count
 		}
+		if typeSet["users"] && typeSet["nodes"] && typeSet["forwards"] && typeSet["userTunnels"] {
+			imported := make(map[int64]bool)
+			for _, node := range backup.Nodes {
+				imported[node.ID] = true
+				if err := tx.Where("scope LIKE ?", fmt.Sprintf("flow:%d:%%", node.ID)).Delete(&model.TrafficCursor{}).Error; err != nil {
+					return err
+				}
+			}
+			for _, cursor := range backup.FlowCursors {
+				var nodeID int64
+				var stream string
+				if _, err := fmt.Sscanf(cursor.Scope, "flow:%d:%s", &nodeID, &stream); err != nil || !imported[nodeID] {
+					continue
+				}
+				id, err := hex.DecodeString(stream)
+				digest, digestErr := hex.DecodeString(cursor.Digest)
+				if err != nil || len(id) != 16 || cursor.Sequence <= 0 || digestErr != nil || len(digest) != 32 {
+					return fmt.Errorf("invalid flow cursor in backup")
+				}
+				if err := tx.Create(&cursor).Error; err != nil {
+					return err
+				}
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -585,6 +641,7 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64) (int, error) 
 			InFlow:            u.InFlow,
 			OutFlow:           u.OutFlow,
 			FlowResetTime:     u.FlowResetTime,
+			FlowResetAt:       u.FlowResetAt,
 			Num:               u.Num,
 			CreatedTime:       u.CreatedTime,
 			UpdatedTime:       sql.NullInt64{Int64: now, Valid: true},
@@ -595,7 +652,7 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64) (int, error) 
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"user", "pwd", "role_id", "exp_time", "flow", "flow_mib", "in_flow", "out_flow",
-				"flow_reset_time", "num", "updated_time", "status", "password_changed_at",
+				"flow_reset_time", "flow_reset_at", "num", "updated_time", "status", "password_changed_at",
 			}),
 		}).Create(&item).Error
 		if err != nil {
@@ -842,15 +899,15 @@ func importUserTunnels(tx *gorm.DB, userTunnels []model.UserTunnelBackup, _ int6
 			FlowMiB:       ut.FlowMiB,
 			InFlow:        ut.InFlow,
 			OutFlow:       ut.OutFlow,
-			FlowResetTime: ut.FlowResetTime,
-			ExpTime:       ut.ExpTime,
-			Status:        ut.Status,
+			FlowResetTime: ut.FlowResetTime, FlowResetAt: ut.FlowResetAt,
+			ExpTime: ut.ExpTime,
+			Status:  ut.Status,
 		}
 		err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"user_id", "tunnel_id", "speed_id", "num", "flow", "flow_mib", "in_flow", "out_flow",
-				"flow_reset_time", "exp_time", "status",
+				"flow_reset_time", "flow_reset_at", "exp_time", "status",
 			}),
 		}).Create(&item).Error
 		if err != nil {

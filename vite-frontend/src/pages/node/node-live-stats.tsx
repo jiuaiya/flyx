@@ -34,6 +34,10 @@ export function NodeLiveStats({
   const down = info ? (info.netInSpeed ?? info.downloadSpeed) : undefined;
   const rate = (v?: number) => (v === undefined ? "—" : `${bytes(v)}/s`);
   const total = month ? bytes(month[0] + month[1]) : "—";
+  const monthHint =
+    new Date().getTimezoneOffset() % 60 !== 0
+      ? "按本地时区统计；跨月的旧小时记录按时长估算"
+      : "按本地时区统计";
   const split = month ? `↑${bytes(month[1])} ↓${bytes(month[0])}` : "";
 
   const items = [
@@ -84,7 +88,7 @@ export function NodeLiveStats({
             </div>
           </div>
         ))}
-        <div className="min-w-0 space-y-2" title={split}>
+        <div className="min-w-0 space-y-2" title={`${split} ${monthHint}`}>
           <div className="flex items-center justify-between gap-2 text-xs">
             <span className="flex shrink-0 items-center gap-1.5 text-default-500">
               <ChartPie className="h-3.5 w-3.5" />

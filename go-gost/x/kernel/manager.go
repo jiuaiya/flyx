@@ -12,9 +12,9 @@ import (
 	"strings"
 	"sync"
 	"time"
-)
 
-const defaultBaseDir = "/etc/flux_agent/kernels"
+	"github.com/go-gost/x/identity"
+)
 
 type instance struct {
 	req     ApplyRequest
@@ -44,13 +44,13 @@ var (
 	defaultManagerOnce sync.Once
 )
 
-// Default returns the process-wide manager rooted at FLVX_KERNEL_DIR or
-// /etc/flux_agent/kernels.
+// Default uses FLYX_KERNEL_DIR (legacy FLVX_KERNEL_DIR is accepted), or
+// the kernels directory alongside the running agent.
 func Default() *Manager {
 	defaultManagerOnce.Do(func() {
-		dir := strings.TrimSpace(os.Getenv("FLVX_KERNEL_DIR"))
+		dir := strings.TrimSpace(identity.Env("FLYX_KERNEL_DIR", "FLVX_KERNEL_DIR"))
 		if dir == "" {
-			dir = defaultBaseDir
+			dir = filepath.Join(identity.DataDir(), "kernels")
 		}
 		defaultManager = NewManager(dir)
 	})
@@ -137,6 +137,39 @@ func (m *Manager) allUserMarks() []int64 {
 		ids = append(ids, inst.req.UserMarks...)
 	}
 	return ids
+}
+
+// syncNft installs access rules before any protected process starts. Counter
+// failures remain non-fatal for kernels without a whitelist.
+func (m *Manager) syncNft() error {
+	err := m.nft.sync(m.allPorts(), m.allUserMarks())
+	if err == nil {
+		return nil
+	}
+	m.mu.Lock()
+	var guarded []*instance
+	for _, inst := range m.instances {
+		inst.logs.add("[flyx] nftables 规则同步失败: " + err.Error())
+		if !inst.req.Enabled {
+			continue
+		}
+		for _, port := range inst.req.Ports {
+			if port.Allow != nil {
+				guarded = append(guarded, inst)
+				break
+			}
+		}
+	}
+	m.mu.Unlock()
+	if len(guarded) == 0 {
+		return nil
+	}
+	err = fmt.Errorf("入站白名单同步失败，已停止受保护内核: %w", err)
+	for _, inst := range guarded {
+		m.stopProcesses(inst)
+		m.setErr(inst, err)
+	}
+	return err
 }
 
 // ensureBinary installs a binary into dir unless it is already there.
@@ -228,11 +261,14 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		m.mu.Unlock()
 	}
 
-	switch {
-	case !req.Enabled:
+	if !req.Enabled || changed || !running {
 		m.stopProcesses(inst)
-	case changed || !running:
-		m.stopProcesses(inst)
+	}
+	if err := m.syncNft(); err != nil {
+		m.persist()
+		return m.state(req.Type, false), err
+	}
+	if req.Enabled && (changed || !running) {
 		m.startProcesses(inst)
 		time.Sleep(startupProbeIn)
 	}
@@ -244,8 +280,10 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		if running && prev.req.Enabled {
 			// It ran before this change: keep the node serving on the
 			// previous config instead of leaving it down.
-			m.rollback(inst, runDir, prev)
-			if m.state(req.Type, false).Running {
+			if err := m.rollback(inst, runDir, prev); err != nil {
+				failure = fmt.Errorf("恢复上一次配置失败: %w", err)
+				m.setErr(inst, failure)
+			} else if m.state(req.Type, false).Running {
 				failure = fmt.Errorf("新配置无法启动，已恢复上一次的配置: %s", failed)
 				m.setErr(inst, failure)
 			}
@@ -253,9 +291,6 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	}
 
 	m.persist()
-	if err := m.nft.sync(m.allPorts(), m.allUserMarks()); err != nil {
-		inst.logs.add("[flyx] 流量计数规则同步失败: " + err.Error())
-	}
 	return m.state(req.Type, false), failure
 }
 
@@ -269,7 +304,8 @@ type prevApply struct {
 	files   map[string][]byte
 }
 
-func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
+func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) error {
+	m.stopProcesses(inst)
 	for name, content := range prev.files {
 		path := filepath.Join(runDir, name)
 		if content == nil {
@@ -284,9 +320,12 @@ func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
 	inst.bins = prev.bins
 	inst.version = prev.version
 	m.mu.Unlock()
-	m.stopProcesses(inst)
+	if err := m.syncNft(); err != nil {
+		return err
+	}
 	m.startProcesses(inst)
 	time.Sleep(startupProbeIn)
+	return nil
 }
 
 // readFiles returns the current contents of the files an apply is about to
@@ -390,7 +429,7 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 			_ = os.RemoveAll(filepath.Join(m.baseDir, kernelType))
 		}
 		m.persist()
-		if err := m.nft.sync(m.allPorts(), m.allUserMarks()); err != nil {
+		if err := m.syncNft(); err != nil {
 			return State{Type: kernelType}, err
 		}
 		return State{Type: kernelType}, nil
@@ -409,7 +448,12 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		m.stopProcesses(inst)
 		m.mu.Lock()
 		inst.req.Enabled = true
+		inst.err = ""
 		m.mu.Unlock()
+		if err := m.syncNft(); err != nil {
+			m.persist()
+			return m.state(kernelType, false), err
+		}
 		m.startProcesses(inst)
 		time.Sleep(startupProbeIn)
 	default:
@@ -486,6 +530,13 @@ func (m *Manager) Status(logsFor string) Status {
 
 // Shutdown stops every kernel process; the persisted state is kept so the
 // next agent start restores them.
+// Uninstall stops every kernel and removes the agent's nftables tables, whose
+// counters, whitelists and port hopping would otherwise outlive the agent.
+func (m *Manager) Uninstall() error {
+	m.Shutdown()
+	return m.nft.removeTables()
+}
+
 func (m *Manager) Shutdown() {
 	m.mu.Lock()
 	insts := make([]*instance, 0, len(m.instances))

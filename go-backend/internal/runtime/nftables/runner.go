@@ -27,7 +27,7 @@ func NewSSHRunner() *SSHRunner {
 
 func (r *SSHRunner) Test(ctx context.Context, cfg SSHConfig) error {
 	nft := nftBinary(cfg)
-	tableName := fmt.Sprintf("flvx_capability_%d", time.Now().UnixNano())
+	tableName := fmt.Sprintf("flyx_capability_%d", time.Now().UnixNano())
 	return r.run(ctx, cfg, buildCapabilityCheckCommand(nft, tableName))
 }
 
@@ -41,11 +41,11 @@ func buildCapabilityCheckCommand(nft, tableName string) string {
 			Protocols:  []string{"tcp", "udp"},
 		}},
 	})
-	script = strings.Replace(script, "table inet flvx {", "table inet "+tableName+" {", 1)
+	script = strings.Replace(script, "table inet flyx {", "table inet "+tableName+" {", 1)
 	return "set -eu\n" +
 		"command -v nft >/dev/null 2>&1\n" +
 		nft + " --version >/dev/null 2>&1\n" +
-		"tmp=$(mktemp /tmp/flvx-nft-capability-XXXXXX.nft)\n" +
+		"tmp=$(mktemp /tmp/flyx-nft-capability-XXXXXX.nft)\n" +
 		"trap 'rm -f \"$tmp\"' EXIT\n" +
 		"cat > \"$tmp\" <<'EOF'\n" + script + "\nEOF\n" +
 		"if ! " + nft + " -c -f \"$tmp\"; then\n" +
@@ -55,21 +55,22 @@ func buildCapabilityCheckCommand(nft, tableName string) string {
 }
 
 func (r *SSHRunner) ApplyScript(ctx context.Context, cfg SSHConfig, script string) error {
-	command := buildApplyCommand(nftBinary(cfg), script)
+	command := buildApplyCommand(nftBinary(cfg), script, cfg.LegacyTables)
 	return r.run(ctx, cfg, command)
 }
 
-func buildApplyCommand(nft, script string) string {
-	return "set -eu\n" +
-		"tmp=$(mktemp /tmp/flvx-nft-XXXXXX.nft)\n" +
-		"batch=$(mktemp /tmp/flvx-nft-batch-XXXXXX.nft) || { rm -f \"$tmp\"; exit 1; }\n" +
+func buildApplyCommand(nft, script string, legacy bool) string {
+	return "set -eu\n" + selectTableCommand(nft, "flyx", "flvx", legacy) +
+		"tmp=$(mktemp /tmp/flyx-nft-XXXXXX.nft)\n" +
+		"batch=$(mktemp /tmp/flyx-nft-batch-XXXXXX.nft) || { rm -f \"$tmp\"; exit 1; }\n" +
 		"cleanup() {\n" +
 		"  rm -f \"$tmp\" \"$batch\"\n" +
 		"}\n" +
 		"trap cleanup EXIT\n" +
 		"cat > \"$tmp\" <<'EOF'\n" + script + "\nEOF\n" +
-		"if " + nft + " list table inet flvx >/dev/null 2>&1; then\n" +
-		"  { printf '%s\\n' 'delete table inet flvx'; cat \"$tmp\"; } > \"$batch\"\n" +
+		"if [ \"$table\" = flvx ]; then sed 's/flyx/flvx/g' \"$tmp\" > \"$batch\"; cp \"$batch\" \"$tmp\"; fi\n" +
+		"if " + nft + " list table inet \"$table\" >/dev/null 2>&1; then\n" +
+		"  { printf '%s\\n' \"delete table inet $table\"; cat \"$tmp\"; } > \"$batch\"\n" +
 		"else\n" +
 		"  cp \"$tmp\" \"$batch\"\n" +
 		"fi\n" +
@@ -81,7 +82,23 @@ func buildApplyCommand(nft, script string) string {
 }
 
 func (r *SSHRunner) ListTableJSON(ctx context.Context, cfg SSHConfig) ([]byte, error) {
-	return r.runOutput(ctx, cfg, nftBinary(cfg)+" -j list table inet flvx")
+	nft := nftBinary(cfg)
+	return r.runOutput(ctx, cfg, "set -eu\n"+selectTableCommand(nft, "flyx", "flvx", cfg.LegacyTables)+nft+" -j list table inet \"$table\"")
+}
+
+// Existing tables retain their identity and counters until explicitly cleared.
+// Refuse ambiguous ownership instead of applying or counting two rule sets.
+// Without allowLegacy the legacy table belongs to another panel (FLVX) and
+// is never touched.
+func selectTableCommand(nft, current, legacy string, allowLegacy bool) string {
+	if !allowLegacy {
+		return nft + " list tables >/dev/null\n" + "table=" + current + "\n"
+	}
+	return nft + " list tables >/dev/null\n" +
+		"table=" + current + "\n" +
+		"if " + nft + " list table inet " + legacy + " >/dev/null 2>&1; then\n" +
+		"  if " + nft + " list table inet " + current + " >/dev/null 2>&1; then echo 'Both FLYX and legacy tables exist; select one installation before continuing' >&2; exit 1; fi\n" +
+		"  table=" + legacy + "\nfi\n"
 }
 
 func (r *SSHRunner) run(ctx context.Context, cfg SSHConfig, command string) error {

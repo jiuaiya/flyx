@@ -10,8 +10,16 @@ import (
 )
 
 func RenderTable(plan NodePlan) string {
+	comment := func(id int64, direction, protocol string) string {
+		v := counterComment(id, direction, protocol)
+		if plan.Generation != "" {
+			v += " " + plan.Generation
+		}
+		return v
+	}
+
 	var b strings.Builder
-	b.WriteString("table inet flvx {\n")
+	b.WriteString("table inet flyx {\n")
 	b.WriteString("  chain prerouting {\n")
 	b.WriteString("    type nat hook prerouting priority dstnat; policy accept;\n")
 	for _, rule := range sortedRules(plan.Rules) {
@@ -26,7 +34,7 @@ func RenderTable(plan NodePlan) string {
 				rule.InPort,
 				dnatFamily,
 				formatDNATTarget(rule.TargetHost, rule.TargetPort),
-				counterComment(rule.ForwardID, CounterDirectionDNAT, protocol),
+				comment(rule.ForwardID, CounterDirectionDNAT, protocol),
 			))
 		}
 	}
@@ -34,7 +42,7 @@ func RenderTable(plan NodePlan) string {
 	b.WriteString("  chain postrouting {\n")
 	b.WriteString("    type nat hook postrouting priority srcnat; policy accept;\n")
 	if len(plan.Rules) > 0 {
-		b.WriteString("    masquerade comment \"flvx masquerade\"\n")
+		b.WriteString("    masquerade comment \"flyx masquerade\"\n")
 	}
 	b.WriteString("  }\n\n")
 	b.WriteString("  chain forward {\n")
@@ -53,7 +61,7 @@ func RenderTable(plan NodePlan) string {
 				targetHost,
 				protocol,
 				rule.TargetPort,
-				counterComment(rule.ForwardID, CounterDirectionToTarget, protocol),
+				comment(rule.ForwardID, CounterDirectionToTarget, protocol),
 			))
 			b.WriteString(fmt.Sprintf("    meta l4proto %s ct original proto-dst %d %s saddr %s %s sport %d counter comment %q\n",
 				protocol,
@@ -62,7 +70,7 @@ func RenderTable(plan NodePlan) string {
 				targetHost,
 				protocol,
 				rule.TargetPort,
-				counterComment(rule.ForwardID, CounterDirectionFromTarget, protocol),
+				comment(rule.ForwardID, CounterDirectionFromTarget, protocol),
 			))
 		}
 	}
@@ -72,7 +80,7 @@ func RenderTable(plan NodePlan) string {
 }
 
 func counterComment(forwardID int64, direction, protocol string) string {
-	return fmt.Sprintf("flvx forward:%d %s %s", forwardID, direction, protocol)
+	return fmt.Sprintf("flyx forward:%d %s %s", forwardID, direction, protocol)
 }
 
 func RuleHash(rule Rule) string {

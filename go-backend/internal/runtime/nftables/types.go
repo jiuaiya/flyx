@@ -19,6 +19,7 @@ type Target struct {
 }
 
 type Rule struct {
+	Paused     bool
 	ForwardID  int64
 	InPort     int
 	BindIP     string
@@ -28,8 +29,9 @@ type Rule struct {
 }
 
 type NodePlan struct {
-	NodeID int64
-	Rules  []Rule
+	Generation string
+	NodeID     int64
+	Rules      []Rule
 }
 
 type SSHConfig struct {
@@ -41,6 +43,8 @@ type SSHConfig struct {
 	PrivateKey string
 	Passphrase string
 	SudoMode   string
+	// LegacyTables allows reusing an existing flvx / flvx_quota table.
+	LegacyTables bool
 }
 
 type ApplyResult struct {

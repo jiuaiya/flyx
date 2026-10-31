@@ -16,8 +16,9 @@ PINNED_VERSION=""
 # 镜像加速配置（可由面板传入或交互式询问）
 PROXY_ENABLED="${PROXY_ENABLED:-}"
 PROXY_URL="${PROXY_URL:-}"
-DEFAULT_PANEL_BACKEND_CONTAINER="flux-panel-backend"
-DEFAULT_PANEL_POSTGRES_CONTAINER="flux-panel-postgres"
+DEFAULT_PANEL_BACKEND_CONTAINER="flyx-panel-backend"
+DEFAULT_PANEL_POSTGRES_CONTAINER="flyx-panel-postgres"
+DEFAULT_PANEL_DEPLOY_DIR="/opt/flyx-panel"
 PANEL_SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 # 镜像加速
@@ -99,6 +100,10 @@ resolve_latest_release_tag() {
 resolve_version() {
   if [[ -n "${VERSION:-}" ]]; then
     echo "$VERSION"
+    return 0
+  fi
+  if [[ -n "${FLYX_VERSION:-}" ]]; then
+    echo "$FLYX_VERSION"
     return 0
   fi
   if [[ -n "${FLUX_VERSION:-}" ]]; then
@@ -331,8 +336,66 @@ get_container_compose_label() {
   printf '%s' "$value"
 }
 
+# Images of this project live under ghcr.io/<owner>/; flux-panel and FLVX
+# publish theirs elsewhere.
+flyx_image_prefix() {
+  local owner="${REPO%%/*}"
+  printf 'ghcr.io/%s/' "$(printf '%s' "$owner" | tr '[:upper:]' '[:lower:]')"
+}
+
+# flux-panel, FLVX and FLYX before 3.4.0 all name the backend
+# flux-panel-backend; only a container running our image is this panel.
+is_flyx_container() {
+  local image
+  image=$(docker inspect -f '{{.Config.Image}}' "$1" 2>/dev/null || true)
+  [[ "$image" == "$(flyx_image_prefix)"* ]]
+}
+
+# The same check for a deployment directory: its compose file must pull our
+# images, so another panel's .env and docker-compose.yml are never touched.
+is_flyx_deploy_dir() {
+  [[ -f "$1/.env" && -f "$1/docker-compose.yml" ]] && grep -Fq "$(flyx_image_prefix)" "$1/docker-compose.yml"
+}
+
+detect_panel_backend() {
+  local configured="${PANEL_BACKEND_CONTAINER:-}" current="" legacy=""
+  if [[ -z "$configured" ]]; then
+    configured=$(get_env_var PANEL_BACKEND_CONTAINER "${PANEL_DEPLOY_DIR:-.}/.env" || true)
+  fi
+  if [[ -n "$configured" ]]; then printf '%s' "$configured"; return; fi
+  current=$(docker inspect -f '{{.Name}}' flyx-panel-backend 2>/dev/null || true)
+  legacy=$(docker inspect -f '{{.Name}}' flux-panel-backend 2>/dev/null || true)
+  if [[ -n "$legacy" ]] && ! is_flyx_container flux-panel-backend; then
+    legacy=""
+  fi
+  if [[ -n "$current" && -n "$legacy" ]]; then
+    echo "❌ 同时发现新旧面板，请通过 PANEL_BACKEND_CONTAINER 指定要管理的实例。" >&2
+    return 1
+  fi
+  if [[ -n "$legacy" ]]; then printf '%s' flux-panel-backend; else printf '%s' "$DEFAULT_PANEL_BACKEND_CONTAINER"; fi
+}
+
+write_new_panel_identity() {
+  local backend=flyx-panel-backend frontend=flyx-panel-frontend postgres=flyx-panel-postgres
+  local sqlite_volume=flyx-sqlite-data postgres_volume=flyx-postgres-data network=flyx-network
+  # Installing an older release must use names its Compose file understands.
+  if [[ -f docker-compose.yml ]] && ! grep -Fq 'FLYX_SQLITE_VOLUME' docker-compose.yml; then
+    backend=flux-panel-backend frontend=vite-frontend postgres=flux-panel-postgres
+    sqlite_volume=sqlite_data postgres_volume=postgres_data network=gost-network
+  fi
+  upsert_env_var .env PANEL_BACKEND_CONTAINER "$backend"
+  upsert_env_var .env PANEL_FRONTEND_CONTAINER "$frontend"
+  upsert_env_var .env PANEL_POSTGRES_CONTAINER "$postgres"
+  upsert_env_var .env FLYX_SQLITE_VOLUME "$sqlite_volume"
+  upsert_env_var .env FLYX_POSTGRES_VOLUME "$postgres_volume"
+  upsert_env_var .env FLYX_NETWORK "$network"
+  PANEL_BACKEND_CONTAINER="$backend"
+  PANEL_POSTGRES_CONTAINER="$postgres"
+}
+
 resolve_panel_deployment() {
-  local backend_container="${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
+  local backend_container
+  backend_container=$(detect_panel_backend) || return 1
   local requested_dir="${PANEL_DEPLOY_DIR:-}"
   local label_dir label_project deploy_dir project_name
 
@@ -342,7 +405,7 @@ resolve_panel_deployment() {
   # Older in-panel upgrades ran Compose inside a helper container, which left
   # the label pointing at the container path (/opt/flvx-panel) instead of the
   # real deployment. Prefer the current directory when only it has the files.
-  if [[ -n "$label_dir" && ! -f "$label_dir/docker-compose.yml" && -f ".env" && -f "docker-compose.yml" ]]; then
+  if [[ -n "$label_dir" && ! -f "$label_dir/docker-compose.yml" ]] && is_flyx_deploy_dir .; then
     echo "⚠️ 容器标签记录的部署目录 $label_dir 中没有 docker-compose.yml，改用当前目录 $(pwd -P)"
     label_dir=""
   fi
@@ -351,10 +414,12 @@ resolve_panel_deployment() {
     deploy_dir="$requested_dir"
   elif [[ -n "$label_dir" ]]; then
     deploy_dir="$label_dir"
-  elif [[ -f ".env" && -f "docker-compose.yml" ]]; then
+  elif is_flyx_deploy_dir .; then
     deploy_dir=$(pwd -P)
+  elif is_flyx_deploy_dir "$DEFAULT_PANEL_DEPLOY_DIR"; then
+    deploy_dir="$DEFAULT_PANEL_DEPLOY_DIR"
   else
-    echo "❌ 无法识别面板部署目录：未找到容器 Compose 标签，当前目录也没有完整部署配置"
+    echo "❌ 无法识别 FLYX 面板部署目录：未找到 FLYX 容器的 Compose 标签，当前目录和 $DEFAULT_PANEL_DEPLOY_DIR 也没有 FLYX 的部署配置"
     return 1
   fi
 
@@ -382,7 +447,10 @@ resolve_panel_deployment() {
 
   PANEL_DEPLOY_DIR="$deploy_dir"
   PANEL_BACKEND_CONTAINER="$backend_container"
-  PANEL_POSTGRES_CONTAINER="${PANEL_POSTGRES_CONTAINER:-$DEFAULT_PANEL_POSTGRES_CONTAINER}"
+  local postgres_default="$DEFAULT_PANEL_POSTGRES_CONTAINER"
+  [[ "$backend_container" != flux-panel-backend ]] || postgres_default=flux-panel-postgres
+  PANEL_POSTGRES_CONTAINER="${PANEL_POSTGRES_CONTAINER:-$(get_env_var PANEL_POSTGRES_CONTAINER "$deploy_dir/.env" || true)}"
+  PANEL_POSTGRES_CONTAINER="${PANEL_POSTGRES_CONTAINER:-$postgres_default}"
   PANEL_COMPOSE_PROJECT="$project_name"
   export PANEL_DEPLOY_DIR PANEL_BACKEND_CONTAINER PANEL_POSTGRES_CONTAINER PANEL_COMPOSE_PROJECT
   if [[ -n "$project_name" ]]; then
@@ -472,7 +540,7 @@ download_panel_update_compose() {
 }
 
 validate_panel_update_compose() {
-  if ! FLUX_VERSION="$LATEST_VERSION" run_panel_compose -f "$UPDATE_COMPOSE_CANDIDATE" config -q; then
+  if ! FLYX_VERSION="$LATEST_VERSION" FLUX_VERSION="$LATEST_VERSION" run_panel_compose -f "$UPDATE_COMPOSE_CANDIDATE" config -q; then
     echo "❌ 新 Compose 配置校验失败，更新终止"
     return 1
   fi
@@ -557,9 +625,9 @@ pull_panel_update_images() {
   local db_type="$1"
 
   if [[ "$db_type" == "postgres" ]]; then
-    FLUX_VERSION="$LATEST_VERSION" run_panel_compose -f "$UPDATE_COMPOSE_CANDIDATE" pull backend frontend postgres
+    FLYX_VERSION="$LATEST_VERSION" FLUX_VERSION="$LATEST_VERSION" run_panel_compose -f "$UPDATE_COMPOSE_CANDIDATE" pull backend frontend postgres
   else
-    FLUX_VERSION="$LATEST_VERSION" run_panel_compose -f "$UPDATE_COMPOSE_CANDIDATE" pull backend frontend
+    FLYX_VERSION="$LATEST_VERSION" FLUX_VERSION="$LATEST_VERSION" run_panel_compose -f "$UPDATE_COMPOSE_CANDIDATE" pull backend frontend
   fi
 }
 
@@ -569,20 +637,44 @@ activate_panel_update_files() {
     return 1
   fi
   UPDATE_COMPOSE_CANDIDATE=""
-  if ! upsert_env_var ".env" "FLUX_VERSION" "$LATEST_VERSION"; then
+  if ! upsert_env_var ".env" "FLYX_VERSION" "$LATEST_VERSION" || ! upsert_env_var ".env" "FLUX_VERSION" "$LATEST_VERSION"; then
     echo "❌ 更新版本配置失败"
     return 1
   fi
+}
+
+# 3.4.0 renamed the network's Compose key. An existing network keeps the other
+# key in its com.docker.compose.network label and Compose refuses to reuse it;
+# recreate the network (volumes are kept) and run the same command again.
+panel_compose_up() {
+  local output
+  if output=$(run_panel_compose up "$@" 2>&1); then
+    printf '%s\n' "$output"
+    return 0
+  fi
+  printf '%s\n' "$output"
+  local network
+  network=$(sed -n 's/.*network \([^ ]*\) was found but has incorrect label com\.docker\.compose\.network.*/\1/p' <<<"$output" | head -n 1)
+  if [[ -z "$network" ]]; then
+    return 1
+  fi
+  echo "🔧 网络 $network 的标签与 Compose 配置不一致，停止服务并重建网络（数据卷保留）..."
+  run_panel_compose down --remove-orphans || true
+  if ! docker network rm "$network" >/dev/null; then
+    echo "❌ 无法删除网络 $network，请先断开仍连接它的容器后重试"
+    return 1
+  fi
+  run_panel_compose up "$@"
 }
 
 start_panel_after_update() {
   local db_type="$1"
 
   if [[ "$db_type" == "postgres" ]]; then
-    run_panel_compose up -d postgres || return 1
+    panel_compose_up -d postgres || return 1
     wait_for_postgres_healthy || return 1
   fi
-  run_panel_compose up -d --force-recreate --remove-orphans backend frontend || return 1
+  panel_compose_up -d --force-recreate --remove-orphans backend frontend || return 1
   wait_for_backend_healthy
 }
 
@@ -595,10 +687,10 @@ rollback_panel_update() {
     return 1
   fi
   if [[ "$db_type" == "postgres" ]]; then
-    run_panel_compose up -d postgres || return 1
+    panel_compose_up -d postgres || return 1
     wait_for_postgres_healthy || return 1
   fi
-  run_panel_compose up -d --force-recreate --remove-orphans backend frontend || return 1
+  panel_compose_up -d --force-recreate --remove-orphans backend frontend || return 1
   wait_for_backend_healthy
 }
 
@@ -674,15 +766,49 @@ delete_self() {
 
 
 
+port_in_use() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -Htln 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]${port}\$"
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -tln 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]${port}\$"
+  else
+    (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null
+  fi
+}
+
+# flux-panel and FLVX default to the same ports; suggest the next free one
+# so the panels can run side by side.
+next_free_port() {
+  local port="$1" skip="${2:-}"
+  while [[ "$port" -lt 65535 ]] && { [[ "$port" == "$skip" ]] || port_in_use "$port"; }; do
+    port=$((port + 2))
+  done
+  printf '%s' "$port"
+}
+
+read_panel_port() {
+  local prompt="$1" default="$2" port
+  while true; do
+    read -p "$prompt（默认 $default）: " port
+    port=${port:-$default}
+    if [[ ! "$port" =~ ^[0-9]+$ || "$port" -lt 1 || "$port" -gt 65535 ]]; then
+      echo "❌ 不是有效端口：$port" >&2
+    elif port_in_use "$port"; then
+      echo "❌ 端口 $port 已被占用（可能是其他面板），请换一个" >&2
+    else
+      printf '%s' "$port"
+      return
+    fi
+  done
+}
+
 # 获取用户输入的配置参数
 get_config_params() {
   echo "🔧 请输入配置参数："
 
-  read -p "前端端口（默认 6366）: " FRONTEND_PORT
-  FRONTEND_PORT=${FRONTEND_PORT:-6366}
-
-  read -p "后端端口（默认 6365）: " BACKEND_PORT
-  BACKEND_PORT=${BACKEND_PORT:-6365}
+  FRONTEND_PORT=$(read_panel_port "前端端口" "$(next_free_port 6366)")
+  BACKEND_PORT=$(read_panel_port "后端端口" "$(next_free_port 6365 "$FRONTEND_PORT")")
 
   echo "请选择数据库类型："
   echo "1. SQLite（默认）"
@@ -701,8 +827,8 @@ get_config_params() {
       ;;
   esac
 
-  POSTGRES_DB="flux_panel"
-  POSTGRES_USER="flux_panel"
+  POSTGRES_DB="flyx_panel"
+  POSTGRES_USER="flyx_panel"
   POSTGRES_PASSWORD=$(generate_random)
 
   if [[ "$DB_TYPE" == "postgres" ]]; then
@@ -715,6 +841,23 @@ get_config_params() {
   JWT_SECRET=$(generate_random)
 }
 
+# New installs get their own directory: the Compose project is named after
+# it, and flux-panel / FLVX keep their .env and docker-compose.yml in /root.
+prepare_panel_install_dir() {
+  local dir="${PANEL_DEPLOY_DIR:-$DEFAULT_PANEL_DEPLOY_DIR}" confirm
+  mkdir -p "$dir" || return 1
+  cd "$dir" || return 1
+  if [[ -f .env || -f docker-compose.yml ]]; then
+    if ! is_flyx_deploy_dir .; then
+      echo "❌ $dir 中已有其他面板的部署文件，请用 PANEL_DEPLOY_DIR 指定一个空目录"
+      return 1
+    fi
+    read -p "⚠️ $dir 已有 FLYX 面板配置，重新安装会覆盖 .env（JWT 密钥等），继续吗？(y/N): " confirm
+    [[ "$confirm" == "y" || "$confirm" == "Y" ]] || return 1
+  fi
+  echo "📁 部署目录：$(pwd -P)"
+}
+
 # 安装功能
 install_panel() {
   echo "🚀 开始安装面板..."
@@ -723,6 +866,7 @@ install_panel() {
   ensure_compose_urls_initialized || return 1
 
   check_docker
+  prepare_panel_install_dir || return 1
   get_config_params
 
   echo "🔽 下载必要文件..."
@@ -741,6 +885,7 @@ install_panel() {
 JWT_SECRET=$JWT_SECRET
 FRONTEND_PORT=$FRONTEND_PORT
 BACKEND_PORT=$BACKEND_PORT
+FLYX_VERSION=$RESOLVED_VERSION
 FLUX_VERSION=$RESOLVED_VERSION
 
 DB_TYPE=$DB_TYPE
@@ -751,19 +896,20 @@ POSTGRES_USER=$POSTGRES_USER
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 EOF
 
+  write_new_panel_identity
   echo "🚀 启动 docker 服务..."
   if [[ "$DB_TYPE" == "postgres" ]]; then
-    $DOCKER_CMD up -d postgres
+    panel_compose_up -d postgres
     wait_for_postgres_healthy
-    $DOCKER_CMD up -d backend frontend
+    panel_compose_up -d backend frontend
   else
-    $DOCKER_CMD up -d backend frontend
+    panel_compose_up -d backend frontend
   fi
 
   echo "🎉 部署完成"
   echo "🌐 访问地址: http://服务器IP:$FRONTEND_PORT"
   echo "📖 部署完成后请阅读下使用文档，求求了啊，不要上去就是一顿操作"
-  echo "📚 文档地址: https://tes.cc/guide.html"
+  echo "📚 文档地址: https://kure29.github.io/flyx/guide/getting-started"
   echo "💡 默认管理员账号: admin_user / admin_user"
   echo "⚠️  登录后请立即修改默认密码！"
 
@@ -835,10 +981,11 @@ update_panel() {
 
 
 migrate_to_postgres() {
-  local current_db_type postgres_db postgres_user postgres_password database_url
+  local current_db_type postgres_db postgres_user postgres_password database_url sqlite_volume network frontend_container
 
   echo "🔄 开始迁移 SQLite -> PostgreSQL..."
   check_docker
+  resolve_panel_deployment || return 1
 
   if [[ ! -f ".env" ]]; then
     echo "❌ 未找到 .env 文件，请先安装面板"
@@ -874,14 +1021,21 @@ migrate_to_postgres() {
   upsert_env_var ".env" "POSTGRES_PASSWORD" "$postgres_password"
 
   echo "🛑 停止当前服务..."
-  docker stop -t 30 flux-panel-backend 2>/dev/null || true
-  docker stop -t 10 vite-frontend 2>/dev/null || true
+  resolve_panel_deployment || return 1
+  sqlite_volume=$(get_env_var FLYX_SQLITE_VOLUME)
+  sqlite_volume=${sqlite_volume:-sqlite_data}
+  network=$(get_env_var FLYX_NETWORK)
+  network=${network:-gost-network}
+  frontend_container=$(get_env_var PANEL_FRONTEND_CONTAINER)
+  frontend_container=${frontend_container:-vite-frontend}
+  docker stop -t 30 "$PANEL_BACKEND_CONTAINER" 2>/dev/null || true
+  docker stop -t 10 "$frontend_container" 2>/dev/null || true
   echo "⏳ 等待数据同步..."
   sleep 5
   $DOCKER_CMD down
 
   echo "💾 备份 SQLite 数据到当前目录..."
-  if ! docker run --rm -v sqlite_data:/data -v "$(pwd)":/backup alpine sh -c "cp /data/gost.db /backup/gost.db.bak"; then
+  if ! docker run --rm -v "$sqlite_volume:/data" -v "$(pwd)":/backup alpine sh -c "cp /data/gost.db /backup/gost.db.bak"; then
     echo "❌ SQLite 备份失败，迁移终止"
     return 1
   fi
@@ -894,7 +1048,7 @@ migrate_to_postgres() {
   fi
 
   echo "🔄 执行 pgloader 迁移..."
-  if ! docker run --rm --network gost-network -v sqlite_data:/sqlite dimitri/pgloader:latest pgloader /sqlite/gost.db "postgresql://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db}"; then
+  if ! docker run --rm --network "$network" -v "$sqlite_volume:/sqlite" dimitri/pgloader:latest pgloader /sqlite/gost.db "postgresql://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db}"; then
     echo "❌ pgloader 迁移失败，迁移终止（如报 28P01，可执行 docker volume rm postgres_data 后重试）"
     return 1
   fi
@@ -921,6 +1075,13 @@ migrate_to_postgres() {
 uninstall_panel() {
   echo "🗑️ 开始卸载面板..."
   check_docker
+  resolve_panel_deployment || return 1
+  # Without .env the downloaded Compose file falls back to the names that
+  # flux-panel and FLVX also use, and would delete their volumes.
+  if [[ ! -f ".env" ]]; then
+    echo "❌ 部署目录缺少 .env，无法确认要删除的容器和数据卷，卸载终止"
+    return 1
+  fi
 
   if [[ ! -f "docker-compose.yml" ]]; then
     echo "⚠️ 未找到 docker-compose.yml 文件，正在下载以完成卸载..."

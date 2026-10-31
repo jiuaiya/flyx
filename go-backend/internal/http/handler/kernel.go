@@ -28,7 +28,23 @@ const (
 	kernelStatusRunning = "running"
 	kernelStatusStopped = "stopped"
 	kernelStatusError   = "error"
+	// kernelStatusOffline is shown, never stored: the node is offline, so
+	// the last known state may be stale (e.g. the server was reinstalled).
+	kernelStatusOffline = "offline"
 )
+
+// kernelStatusOnNode is the status to show for a kernel: what the agent
+// last reported, unless the node is offline and the report is out of date.
+func kernelStatusOnNode(status string, node *model.Node) string {
+	// Imported nodes have no kernel (and no status) to override.
+	if status == "" || status == kernelStatusPending {
+		return status
+	}
+	if node == nil || node.Status != 1 {
+		return kernelStatusOffline
+	}
+	return status
+}
 
 var kernelStatusInterval = 60 * time.Second
 
@@ -108,6 +124,7 @@ type inboundView struct {
 	// SplitRules are the inbound's 分流 rules.
 	SplitRules         []kernel.SplitRule `json:"splitRules"`
 	OutboundIPStrategy string             `json:"outboundIpStrategy"`
+	Tags               []string           `json:"tags"`
 }
 
 // kernelSecurityView hides the self-signed private material and DNS API
@@ -258,7 +275,7 @@ func (h *Handler) kernelViews(nodeID int64) ([]kernelView, error) {
 			KernelType:       k.KernelType,
 			Version:          k.Version,
 			InstalledVersion: k.InstalledVersion,
-			Status:           k.Status,
+			Status:           kernelStatusOnNode(k.Status, node),
 			LastError:        k.LastError,
 			Synced:           k.ConfigHash != "" && k.ConfigHash == k.AppliedHash,
 			Enabled:          k.Enabled == 1,
@@ -550,7 +567,7 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			ID:                 row.ID,
 			KernelID:           row.KernelID,
 			KernelType:         k.KernelType,
-			KernelStatus:       k.Status,
+			KernelStatus:       kernelStatusOnNode(k.Status, node),
 			External:           isExternalInbound(&row),
 			NodeID:             row.NodeID,
 			Name:               row.Name,
@@ -580,6 +597,7 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			OutboundID:         row.OutboundID,
 			SplitRules:         rowSplitRules(row),
 			OutboundIPStrategy: row.OutboundIPStrategy,
+			Tags:               splitTags(row.Tags),
 		}
 		v.ShareAddress = inboundShareAddress(&row, nodes[row.NodeID])
 		if v.SplitRules == nil {
@@ -1606,7 +1624,9 @@ func (h *Handler) reconcileNodeKernels(nodeID int64) {
 		return
 	}
 	for _, k := range kernels {
-		if err := h.applyKernel(k.ID, false); err != nil {
+		// A reconnecting agent may have to download the kernel again (the
+		// server was reinstalled), so allow an install's time.
+		if err := h.applyKernel(k.ID, true); err != nil {
 			log.Printf("kernel reconcile failed node_id=%d kernel=%s err=%v", nodeID, k.KernelType, err)
 		}
 	}
@@ -1630,6 +1650,12 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 	if err != nil || (len(kernels) == 0 && !evenIfNone) {
 		return
 	}
+	sequence, err := h.repo.NextCounterSnapshot(nodeID, "kernel")
+	if err != nil {
+		log.Printf("counter sequence failed: %v", err)
+		return
+	}
+
 	res, err := h.sendNodeCommandWithTimeout(nodeID, "KernelStatus", map[string]interface{}{}, kernelCommandTimeout, false, false)
 	if err != nil {
 		return // offline, or an agent without kernel support
@@ -1671,7 +1697,7 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 				continue
 			}
 			go func(id int64) {
-				if err := h.applyKernel(id, false); err != nil {
+				if err := h.applyKernel(id, true); err != nil {
 					log.Printf("kernel drift re-apply failed kernel_id=%d err=%v", id, err)
 				}
 			}(k.ID)
@@ -1700,10 +1726,7 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 	if !status.NftAvailable {
 		return
 	}
-	if len(status.Users) > 0 {
-		h.applyUserCounters(nodeID, status.Epoch, status.Users, now)
-	}
-	if len(status.Counters) == 0 {
+	if len(status.Counters) == 0 && len(status.Users) == 0 {
 		return
 	}
 	samples := make([]repo.InboundCounterSample, 0, len(status.Counters))
@@ -1721,12 +1744,34 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 			Bytes:     c.Bytes,
 		})
 	}
-	if err := h.repo.ApplyInboundCounterSamples(samples, now); err != nil {
+	var batch flowUploadBatch
+	var quotas map[int64]*model.UserQuotaView
+	applied, err := h.repo.ApplyCounterSnapshot(nodeID, "kernel", sequence, status.Epoch, func(tx *repo.Repository) error {
+		users := make([]repo.SubscriptionCounterSample, 0, len(status.Users))
+		for _, c := range status.Users {
+			users = append(users, repo.SubscriptionCounterSample{SubscriptionID: c.ID, Direction: c.Dir, Bytes: c.Bytes})
+		}
+		if err := tx.ApplySubscriptionCounterSamples(nodeID, status.Epoch, users, now); err != nil {
+			return err
+		}
+		if err := tx.ApplyInboundCounterSamples(samples, now); err != nil {
+			return err
+		}
+		var err error
+		batch, quotas, err = (&Handler{repo: tx}).applyRealmCountersTx(nodeID, status.Epoch, realmCounters, time.UnixMilli(now))
+		return err
+	})
+	if err != nil {
 		log.Printf("kernel traffic apply failed node_id=%d err=%v", nodeID, err)
+		return
 	}
-	if len(realmCounters) > 0 {
-		h.applyRealmCounters(nodeID, status.Epoch, realmCounters, time.UnixMilli(now))
+	if applied {
+		h.enforceFlowUploadBatch(nodeID, batch, quotas)
+		if len(status.Users) > 0 {
+			h.syncSubscriptions(time.UnixMilli(now))
+		}
 	}
+
 }
 
 func (h *Handler) runKernelStatusLoop(ctx context.Context) {

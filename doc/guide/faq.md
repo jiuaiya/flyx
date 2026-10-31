@@ -4,6 +4,10 @@
 
 ## 面板
 
+### WHMCS 等集成登录提示“验证码校验失败”？
+
+启用登录验证码并配置完整的 Cloudflare Turnstile 密钥后，所有密码登录都必须提交有效的 `captchaId`，包括 WHMCS 等集成。`X-FLVX-API-Client` 是客户端可自行填写的请求头，不再提供验证码豁免。依赖旧豁免的集成需要适配验证码流程；验证码令牌只能使用一次。
+
 ### 安装脚本提示 "Docker command not found"？
 请确保您的系统已安装 Docker 和 Docker Compose。
 - Ubuntu/Debian 安装 Docker: `curl -fsSL https://get.docker.com | bash`
@@ -29,8 +33,8 @@
 ### 服务器显示离线？
 1. 检查服务器与面板服务器之间的网络连通性。
 2. 确认在服务器端安装时输入的 **面板地址** 和 **密钥** 是否正确。
-3. 检查服务器端服务状态：`systemctl status flux_agent`（Alpine 用 `rc-service flux_agent status`）。
-4. 查看服务器端日志：`journalctl -u flux_agent -f`。
+3. 检查服务器端服务状态：`systemctl status flyx-agent`（Alpine 用 `rc-service flyx-agent status`；3.4.0 之前安装的节点是 `flux_agent`）。
+4. 查看服务器端日志：`journalctl -u flyx-agent -f`。
 
 ### 部署或升级服务器提示 “API rate limit exceeded”？
 
@@ -70,6 +74,8 @@ GITHUB_TOKEN=github_pat_xxx
 ### Reality 用 Clash / Mihomo 连不上
 
 Xray 26.7.11 起，Reality 未设置“最低客户端版本”时默认只接受 26.3.27 及以上的客户端，而 Mihomo（Clash Verge、Stash、FlClash 等）上报的版本是 1.8.2，会被拒绝。面板默认把最低客户端版本设为 `1.0.0`，所有客户端都能连接；如需调整，在 Reality 设置里修改“最低客户端版本”。也可以在安装内核时选择旧版本的 Xray。
+
+服务器装的是 Xray 25.5.16 及以上时，Mihomo 订阅里的 VLESS Reality 节点会带上 `support-x25519mlkem768: true`，启用抗量子的 X25519MLKEM768 密钥交换。这个选项需要服务端支持，所以 sing-box 内核、更旧的 Xray 和导入的节点都不会加；导入的节点保留订阅源本身的设置。
 
 ## 订阅与流量
 

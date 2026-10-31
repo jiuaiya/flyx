@@ -41,13 +41,16 @@ type Handler struct {
 	// after newer ones through overlapping UI, reconnect and periodic polls.
 	kernelStatusPolls sync.Map
 
-	peerResourceMu sync.Mutex
-	captchaMu      sync.Mutex
-	captchaTokens  map[string]int64
-	passkeyMu      sync.Mutex
-	passkeyPending map[string]passkeyCeremony
-	githubMu       sync.Mutex
-	githubPending  map[string]githubState
+	quotaControlMu    sync.Mutex
+	quotaPauseAcks    map[int64]time.Time
+	nftablesControlMu sync.Mutex
+	peerResourceMu    sync.Mutex
+	captchaMu         sync.Mutex
+	captchaTokens     map[string]int64
+	passkeyMu         sync.Mutex
+	passkeyPending    map[string]passkeyCeremony
+	githubMu          sync.Mutex
+	githubPending     map[string]githubState
 
 	jobsMu          sync.Mutex
 	jobsCancel      context.CancelFunc
@@ -287,6 +290,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/subscription/icon-library/save", h.subscriptionIconLibrarySave)
 	mux.HandleFunc("/api/v1/subscription/icon-library/delete", h.subscriptionIconLibraryDelete)
 	mux.HandleFunc("/api/v1/inbound/toggle", h.inboundToggle)
+	mux.HandleFunc("/api/v1/inbound/tags", h.inboundTags)
 	mux.HandleFunc("/api/v1/inbound/split", h.inboundSplitSave)
 	mux.HandleFunc("/api/v1/inbound/reset-traffic", h.inboundResetTraffic)
 	mux.HandleFunc("/api/v1/inbound/regenerate", h.inboundRegenerate)
@@ -394,6 +398,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/flow/test", h.flowTest)
 	mux.HandleFunc("/flow/config", h.flowConfig)
 	mux.HandleFunc("/flow/upload", h.flowUpload)
+	mux.HandleFunc("/flow/upload/v2", func(w http.ResponseWriter, r *http.Request) { h.serveFlowUpload(w, r, true) })
 	mux.HandleFunc("/error", h.errorPage)
 }
 
@@ -423,7 +428,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	if captchaEnabled && !h.apiClientCaptchaBypassEnabled(r) {
+	if captchaEnabled {
 		captchaID := strings.TrimSpace(req.CaptchaID)
 		if captchaID == "" {
 			response.WriteJSON(w, response.ErrDefault("验证码校验失败"))
@@ -981,33 +986,7 @@ func (h *Handler) flowConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
-	secret := r.URL.Query().Get("secret")
-	node, _ := h.repo.GetNodeBySecret(secret)
-	if node == nil {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte("ok"))
-		return
-	}
-
-	raw, err := readAndDecryptFlowBody(r.Body, secret)
-	if err == nil && strings.TrimSpace(raw) != "" {
-		var items []flowItem
-		if json.Unmarshal([]byte(raw), &items) == nil {
-			now := time.Now()
-			forwardIDs := collectFlowUploadForwardIDs(items)
-			metas, metaErr := h.repo.GetFlowUploadForwardMetas(forwardIDs)
-			if metaErr != nil {
-				log.Printf("flow upload metadata lookup failed node_id=%d err=%v", node.ID, metaErr)
-				metas = map[int64]repo.FlowUploadForwardMeta{}
-			}
-			batch := h.buildNodeFlowUploadBatch(node.ID, items, metas)
-			h.recordTunnelMetricsFromForwardBatch(node.ID, batch.forwardTraffic, metas, now.UnixMilli())
-			h.applyFlowUploadBatch(node.ID, batch, now)
-		}
-	}
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = w.Write([]byte("ok"))
+	h.serveFlowUpload(w, r, false)
 }
 
 func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
@@ -1437,20 +1416,6 @@ func (h *Handler) captchaEnabled() (bool, error) {
 	}
 
 	return true, nil
-}
-
-func (h *Handler) apiClientCaptchaBypassEnabled(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-
-	client := strings.ToLower(strings.TrimSpace(r.Header.Get("X-FLVX-API-Client")))
-	switch client {
-	case "whmcs", "whmcs-module":
-		return true
-	default:
-		return false
-	}
 }
 
 func (h *Handler) markCaptchaToken(token string) {

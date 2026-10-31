@@ -20,6 +20,7 @@ type User struct {
 	InFlow            int64         `gorm:"column:in_flow;not null;default:0"`
 	OutFlow           int64         `gorm:"column:out_flow;not null;default:0"`
 	FlowResetTime     int64         `gorm:"column:flow_reset_time;not null"`
+	FlowResetAt       int64         `gorm:"column:flow_reset_at;not null;default:0"`
 	Num               int           `gorm:"not null"`
 	CreatedTime       int64         `gorm:"column:created_time;not null"`
 	UpdatedTime       sql.NullInt64 `gorm:"column:updated_time"`
@@ -105,18 +106,22 @@ type Node struct {
 func (Node) TableName() string { return "node" }
 
 type NodeSSHConfig struct {
-	ID          int64          `gorm:"primaryKey;autoIncrement"`
-	NodeID      int64          `gorm:"column:node_id;not null;uniqueIndex"`
-	Host        string         `gorm:"type:varchar(255);not null"`
-	Port        int            `gorm:"not null;default:22"`
-	Username    string         `gorm:"type:varchar(100);not null"`
-	AuthType    string         `gorm:"column:auth_type;type:varchar(20);not null"`
-	Password    sql.NullString `gorm:"type:text"`
-	PrivateKey  sql.NullString `gorm:"column:private_key;type:text"`
-	Passphrase  sql.NullString `gorm:"type:text"`
-	SudoMode    string         `gorm:"column:sudo_mode;type:varchar(20);not null;default:'none'"`
-	CreatedTime int64          `gorm:"column:created_time;not null"`
-	UpdatedTime int64          `gorm:"column:updated_time;not null"`
+	ID         int64          `gorm:"primaryKey;autoIncrement"`
+	NodeID     int64          `gorm:"column:node_id;not null;uniqueIndex"`
+	Host       string         `gorm:"type:varchar(255);not null"`
+	Port       int            `gorm:"not null;default:22"`
+	Username   string         `gorm:"type:varchar(100);not null"`
+	AuthType   string         `gorm:"column:auth_type;type:varchar(20);not null"`
+	Password   sql.NullString `gorm:"type:text"`
+	PrivateKey sql.NullString `gorm:"column:private_key;type:text"`
+	Passphrase sql.NullString `gorm:"type:text"`
+	SudoMode   string         `gorm:"column:sudo_mode;type:varchar(20);not null;default:'none'"`
+	// LegacyNftTables lets the panel keep using the flvx / flvx_quota tables
+	// it wrote before the rename. Only nodes configured before that column
+	// existed may; FLVX itself uses those table names too.
+	LegacyNftTables bool  `gorm:"column:legacy_nft_tables;not null;default:false"`
+	CreatedTime     int64 `gorm:"column:created_time;not null"`
+	UpdatedTime     int64 `gorm:"column:updated_time;not null"`
 }
 
 func (NodeSSHConfig) TableName() string { return "node_ssh_config" }
@@ -243,6 +248,7 @@ type UserTunnel struct {
 	InFlow        int64         `gorm:"column:in_flow;not null;default:0"`
 	OutFlow       int64         `gorm:"column:out_flow;not null;default:0"`
 	FlowResetTime int64         `gorm:"column:flow_reset_time;not null"`
+	FlowResetAt   int64         `gorm:"column:flow_reset_at;not null;default:0"`
 	ExpTime       int64         `gorm:"column:exp_time;not null"`
 	Status        int           `gorm:"not null"`
 }
@@ -407,6 +413,7 @@ func (FederationTunnelBinding) TableName() string { return "federation_tunnel_bi
 
 // BackupData represents the full backup structure.
 type BackupData struct {
+	FlowCursors  []TrafficCursor     `json:"flowCursors,omitempty"`
 	Version      string              `json:"version"`
 	ExportedAt   int64               `json:"exportedAt"`
 	Users        []UserBackup        `json:"users,omitempty"`
@@ -531,6 +538,7 @@ type InboundBackup struct {
 	ImportedName        string `json:"importedName,omitempty"`
 	OutboundID          int64  `json:"outboundId,omitempty"`
 	SplitRules          string `json:"splitRules,omitempty"`
+	Tags                string `json:"tags,omitempty"`
 }
 
 type TemplateBackup struct {
@@ -576,6 +584,7 @@ type InboundCounterBackup struct {
 }
 
 type UserBackup struct {
+	FlowResetAt     int64  `json:"flowResetAt,omitempty"`
 	ID              int64  `json:"id"`
 	User            string `json:"user"`
 	Pwd             string `json:"pwd"`
@@ -689,6 +698,7 @@ type ForwardPortBackup struct {
 }
 
 type UserTunnelBackup struct {
+	FlowResetAt   int64 `json:"flowResetAt,omitempty"`
 	ID            int64 `json:"id"`
 	UserID        int64 `json:"userId"`
 	TunnelID      int64 `json:"tunnelId"`
@@ -928,14 +938,15 @@ type NodeMetric struct {
 
 func (NodeMetric) TableName() string { return "node_metric" }
 
-// NodeTraffic is a node's network traffic in one hour (Hour: unix ms the
-// hour starts at), summed from the agent's byte counters.
+// NodeTraffic stores network counter deltas in 15-minute buckets. Hour keeps
+// its legacy name; BucketMinutes distinguishes old hourly aggregates.
 type NodeTraffic struct {
-	ID       int64 `gorm:"primaryKey;autoIncrement"`
-	NodeID   int64 `gorm:"column:node_id;not null;uniqueIndex:idx_node_traffic_hour,priority:1"`
-	Hour     int64 `gorm:"not null;uniqueIndex:idx_node_traffic_hour,priority:2;index:idx_node_traffic_time"`
-	InBytes  int64 `gorm:"column:in_bytes;not null;default:0"`
-	OutBytes int64 `gorm:"column:out_bytes;not null;default:0"`
+	BucketMinutes int   `gorm:"not null;default:60"`
+	ID            int64 `gorm:"primaryKey;autoIncrement"`
+	NodeID        int64 `gorm:"column:node_id;not null;uniqueIndex:idx_node_traffic_hour,priority:1"`
+	Hour          int64 `gorm:"not null;uniqueIndex:idx_node_traffic_hour,priority:2;index:idx_node_traffic_time"`
+	InBytes       int64 `gorm:"column:in_bytes;not null;default:0"`
+	OutBytes      int64 `gorm:"column:out_bytes;not null;default:0"`
 }
 
 func (NodeTraffic) TableName() string { return "node_traffic" }
